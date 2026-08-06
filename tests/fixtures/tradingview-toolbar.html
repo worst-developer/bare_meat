@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>TradingView Toolbar Fixture</title>
+</head>
+<body>
+  <!-- TradingView toolbar symbol button -->
+  <button id="header-toolbar-symbol-search">
+    BTCUSD.P
+  </button>
+
+  <!-- TradingView interval buttons -->
+  <div id="header-toolbar-intervals">
+    <button role="radio" aria-checked="false" data-value="5" data-tooltip="5 minutes">5m</button>
+    <button role="radio" aria-checked="false" data-value="15" data-tooltip="15 minutes">15m</button>
+    <button role="radio" aria-checked="true" data-value="240" data-tooltip="4 hours">4H</button>
+    <button role="radio" aria-checked="false" data-value="1D" data-tooltip="1 day">1D</button>
+  </div>
+
+  <script>
+    // Expose fixture data for tests
+    window.fixtureData = {
+      symbol: 'BTCUSD.P',
+      interval: '4H',
+      intervalDataValue: '240'
+    };
+  </script>
+</body>
+</html>

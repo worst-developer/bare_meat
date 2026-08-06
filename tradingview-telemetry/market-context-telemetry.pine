@@ -1,0 +1,918 @@
+//@version=6
+indicator("Market Context Telemetry [Agent]", overlay=true, max_bars_back=500, max_lines_count=500, max_labels_count=200, max_boxes_count=200)
+
+groupGeneral = "01 - General"
+groupSessions = "03 - Sessions"
+groupStats = "04 - Session Statistics"
+groupLevels = "05 - Reference Levels"
+groupVwap = "06 - VWAP"
+groupProfile = "07 - Volume Profile"
+groupVolume = "08 - Volume / RVOL"
+groupVolatility = "09 - ATR / Volatility"
+groupStructure = "10 - Structure"
+groupVisual = "12 - Visual Style"
+
+exportTelemetry = input.bool(true, "Export machine telemetry", group=groupGeneral)
+asiaSession = input.session("0900-1500:1234567", "Asia", inline="asia", group=groupSessions)
+asiaTimezone = input.string("Asia/Tokyo", "", inline="asia", group=groupSessions)
+frankfurtSession = input.session("0800-0900:1234567", "Frankfurt", inline="frankfurt", group=groupSessions)
+frankfurtTimezone = input.string("Europe/Berlin", "", inline="frankfurt", group=groupSessions)
+londonSession = input.session("0800-1200:1234567", "London", inline="london", group=groupSessions)
+londonTimezone = input.string("Europe/London", "", inline="london", group=groupSessions)
+nySession = input.session("0930-1600:1234567", "New York", inline="ny", group=groupSessions)
+nyTimezone = input.string("America/New_York", "", inline="ny", group=groupSessions)
+statsLength = input.int(10, "Completed sessions", options=[5, 10, 20], group=groupStats)
+profileLookback = input.int(120, "Fixed range bars", minval=20, maxval=300, group=groupProfile)
+profileBins = input.int(24, "Price bins", minval=8, maxval=50, group=groupProfile)
+valueAreaPercent = input.float(70, "Value area %", minval=50, maxval=95, group=groupProfile)
+exportApproximateProfile = input.bool(false, "Export approximate profile telemetry", group=groupProfile)
+rvolLength = input.int(20, "RVOL length", minval=1, group=groupVolume)
+atrLength = input.int(14, "ATR length", minval=1, group=groupVolatility)
+rangeLength = input.int(20, "Normal range length", minval=5, group=groupVolatility)
+structureLength = input.int(5, "Swing length", minval=1, group=groupStructure)
+internalStructureLength = input.int(2, "Internal swing length", minval=1, group=groupStructure)
+breakConfirmation = input.string("Close", "Break confirmation", options=["Close", "Wick"], group=groupStructure)
+fvgMinimumAtr = input.float(0.08, "FVG minimum size (ATR)", minval=0, step=0.01, group=groupStructure)
+displacementMinimumAtr = input.float(0.5, "Displacement body (ATR)", minval=0, step=0.1, group=groupStructure)
+fvgMitigationPercent = input.int(50, "FVG mitigation %", options=[0, 50, 100], group=groupStructure)
+orderBlockRange = input.string("Wick", "Order block range", options=["Wick", "Body"], group=groupStructure)
+showSessions = input.bool(true, "Show session boxes", group=groupVisual)
+sessionHistory = input.int(3, "Session history (days)", minval=1, maxval=10, group=groupVisual)
+showLevels = input.bool(true, "Show D / W / M levels", group=groupVisual)
+showVwaps = input.bool(true, "Show VWAP trails", group=groupVisual)
+showDailyVwap = input.bool(true, "Daily VWAP", inline="vwap", group=groupVisual)
+showWeeklyVwap = input.bool(false, "Weekly", inline="vwap", group=groupVisual)
+showMonthlyVwap = input.bool(false, "Monthly", inline="vwap", group=groupVisual)
+showSessionVwap = input.bool(true, "Session", inline="vwap", group=groupVisual)
+vwapTrailBars = input.int(100, "Maximum bars per VWAP", minval=10, maxval=100, group=groupVisual)
+showProfile = input.bool(false, "Show approximate POC / VAH / VAL", group=groupVisual)
+showStructure = input.bool(true, "Show BOS / ChoCH", group=groupVisual)
+showInternalStructure = input.bool(false, "Show internal structure", group=groupVisual)
+showSwingLabels = input.bool(true, "Show HH / HL / LH / LL", group=groupVisual)
+showFvg = input.bool(false, "Show fair value gaps", group=groupVisual)
+showBlocks = input.bool(false, "Show order / breaker blocks", group=groupVisual)
+zoneHistory = input.int(16, "Zone history", minval=3, maxval=30, group=groupVisual)
+blockLookback = input.int(12, "Order block search bars", minval=3, maxval=30, group=groupVisual)
+showDashboard = input.bool(true, "Show context dashboard", group=groupVisual)
+asiaColor = input.color(color.rgb(66, 165, 245), "Asia color", group=groupVisual)
+frankfurtColor = input.color(color.rgb(171, 71, 188), "Frankfurt color", group=groupVisual)
+londonColor = input.color(color.rgb(38, 166, 154), "London color", group=groupVisual)
+nyColor = input.color(color.rgb(239, 83, 80), "New York color", group=groupVisual)
+
+isCurrent = barstate.islast and exportTelemetry
+onlyCurrent(value) => isCurrent ? value : na
+boolValue(value) => value ? 1.0 : 0.0
+rangePct(sessionHigh, sessionLow, sessionOpen) => not na(sessionOpen) and sessionOpen != 0 ? (sessionHigh - sessionLow) / sessionOpen * 100.0 : na
+returnPct(sessionClose, sessionOpen) => not na(sessionOpen) and sessionOpen != 0 ? (sessionClose - sessionOpen) / sessionOpen * 100.0 : na
+distancePct(level) => not na(level) and close != 0 ? (level - close) / close * 100.0 : na
+
+pushSample(array<float> samples, float value, int limit) =>
+    if not na(value)
+        array.push(samples, value)
+        while array.size(samples) > limit
+            array.shift(samples)
+
+sampleMedian(array<float> samples) => array.size(samples) > 0 ? array.median(samples) : na
+
+trimBoxes(array<box> boxes, int limit) =>
+    while array.size(boxes) > limit
+        box.delete(array.shift(boxes))
+
+trimLines(array<line> lines, int limit) =>
+    while array.size(lines) > limit
+        line.delete(array.shift(lines))
+
+clearLines(array<line> lines) =>
+    while array.size(lines) > 0
+        line.delete(array.shift(lines))
+
+trimLabels(array<label> labels, int limit) =>
+    while array.size(labels) > limit
+        label.delete(array.shift(labels))
+
+levelLine(line currentLine, float value, int startIndex, color lineColor, string lineStyle, int lineWidth) =>
+    result = currentLine
+    if not na(value)
+        safeStart = math.max(startIndex, bar_index - 9999)
+        if na(result)
+            result := line.new(safeStart, value, bar_index, value, extend=extend.right, color=lineColor, style=lineStyle, width=lineWidth)
+        else
+            line.set_xy1(result, safeStart, value)
+            line.set_xy2(result, bar_index, value)
+            line.set_color(result, lineColor)
+            line.set_style(result, lineStyle)
+            line.set_width(result, lineWidth)
+    result
+
+levelTag(label currentLabel, float value, string levelName, color levelColor) =>
+    result = currentLabel
+    if not na(value)
+        tagText = levelName + "  " + str.tostring(value, format.mintick)
+        if na(result)
+            result := label.new(bar_index + 2, value, tagText, style=label.style_label_down, color=color.new(levelColor, 78), textcolor=levelColor, size=size.tiny)
+        else
+            label.set_xy(result, bar_index + 2, value)
+            label.set_text(result, tagText)
+            label.set_color(result, color.new(levelColor, 78))
+            label.set_textcolor(result, levelColor)
+    result
+
+numberText(float value, string pattern) => na(value) ? "-" : str.tostring(value, pattern)
+breaksAbove(float level) => not na(level) and (breakConfirmation == "Close" ? close > level and close[1] <= level : high > level and high[1] <= level)
+breaksBelow(float level) => not na(level) and (breakConfirmation == "Close" ? close < level and close[1] >= level : low < level and low[1] >= level)
+
+var float asiaOpen = na
+var float asiaHigh = na
+var float asiaLow = na
+var float asiaClose = na
+var float asiaVolume = na
+var float asiaPv = na
+var float frankfurtOpen = na
+var float frankfurtHigh = na
+var float frankfurtLow = na
+var float frankfurtVolume = na
+var float frankfurtPv = na
+var float londonOpen = na
+var float londonHigh = na
+var float londonLow = na
+var float londonClose = na
+var float londonVolume = na
+var float londonPv = na
+var float nyOpen = na
+var float nyHigh = na
+var float nyLow = na
+var float nyClose = na
+var float nyVolume = na
+var float nyPv = na
+var float lastAsiaHigh = na
+var float lastAsiaLow = na
+var float lastLondonHigh = na
+var float lastLondonLow = na
+var array<float> asiaRanges = array.new_float()
+var array<float> londonRanges = array.new_float()
+var array<float> nyRanges = array.new_float()
+var array<float> asiaVolumes = array.new_float()
+var array<float> londonVolumes = array.new_float()
+var array<float> nyVolumes = array.new_float()
+
+// Inspect intrabars so session boundaries such as 09:30 remain exact on hourly charts.
+chartSeconds = timeframe.in_seconds()
+sessionLowerTf = chartSeconds >= 1800 ? "30" : timeframe.period
+[intraTimes, intraCloseTimes, intraOpens, intraHighs, intraLows, intraCloses, intraVolumes, intraAsiaStates, intraFrankfurtStates, intraLondonStates, intraNyStates] = request.security_lower_tf(syminfo.tickerid, sessionLowerTf, [time, time_close, open, high, low, close, volume, not na(time(timeframe.period, asiaSession, asiaTimezone)), not na(time(timeframe.period, frankfurtSession, frankfurtTimezone)), not na(time(timeframe.period, londonSession, londonTimezone)), not na(time(timeframe.period, nySession, nyTimezone))], ignore_invalid_timeframe=true, calc_bars_count=10000)
+
+var bool asiaWasActive = false
+var bool frankfurtWasActive = false
+var bool londonWasActive = false
+var bool nyWasActive = false
+var int asiaStartTime = na
+var int asiaEndTime = na
+var int frankfurtStartTime = na
+var int frankfurtEndTime = na
+var int londonStartTime = na
+var int londonEndTime = na
+var int nyStartTime = na
+var int nyEndTime = na
+asiaStartedThisBar = false
+frankfurtStartedThisBar = false
+londonStartedThisBar = false
+nyStartedThisBar = false
+asiaEndedThisBar = false
+frankfurtEndedThisBar = false
+londonEndedThisBar = false
+nyEndedThisBar = false
+
+intraCount = array.size(intraTimes)
+if intraCount > 0
+    for intraIndex = 0 to intraCount - 1
+        intraTime = array.get(intraTimes, intraIndex)
+        intraCloseTime = array.get(intraCloseTimes, intraIndex)
+        intraOpen = array.get(intraOpens, intraIndex)
+        intraHigh = array.get(intraHighs, intraIndex)
+        intraLow = array.get(intraLows, intraIndex)
+        intraClose = array.get(intraCloses, intraIndex)
+        intraVolume = nz(array.get(intraVolumes, intraIndex))
+        asiaActive = array.get(intraAsiaStates, intraIndex)
+        frankfurtActive = array.get(intraFrankfurtStates, intraIndex)
+        londonActive = array.get(intraLondonStates, intraIndex)
+        nyActive = array.get(intraNyStates, intraIndex)
+
+        if asiaActive and not asiaWasActive
+            asiaOpen := intraOpen
+            asiaHigh := intraHigh
+            asiaLow := intraLow
+            asiaClose := intraClose
+            asiaVolume := intraVolume
+            asiaPv := (intraHigh + intraLow + intraClose) / 3.0 * intraVolume
+            asiaStartTime := intraTime
+            asiaEndTime := intraCloseTime
+            asiaStartedThisBar := true
+        else if asiaActive
+            asiaHigh := math.max(asiaHigh, intraHigh)
+            asiaLow := math.min(asiaLow, intraLow)
+            asiaClose := intraClose
+            asiaVolume += intraVolume
+            asiaPv += (intraHigh + intraLow + intraClose) / 3.0 * intraVolume
+            asiaEndTime := intraCloseTime
+        if not asiaActive and asiaWasActive
+            lastAsiaHigh := asiaHigh
+            lastAsiaLow := asiaLow
+            pushSample(asiaRanges, rangePct(asiaHigh, asiaLow, asiaOpen), statsLength)
+            pushSample(asiaVolumes, asiaVolume, statsLength)
+            asiaEndedThisBar := true
+        asiaWasActive := asiaActive
+
+        if frankfurtActive and not frankfurtWasActive
+            frankfurtOpen := intraOpen
+            frankfurtHigh := intraHigh
+            frankfurtLow := intraLow
+            frankfurtVolume := intraVolume
+            frankfurtPv := (intraHigh + intraLow + intraClose) / 3.0 * intraVolume
+            frankfurtStartTime := intraTime
+            frankfurtEndTime := intraCloseTime
+            frankfurtStartedThisBar := true
+        else if frankfurtActive
+            frankfurtHigh := math.max(frankfurtHigh, intraHigh)
+            frankfurtLow := math.min(frankfurtLow, intraLow)
+            frankfurtVolume += intraVolume
+            frankfurtPv += (intraHigh + intraLow + intraClose) / 3.0 * intraVolume
+            frankfurtEndTime := intraCloseTime
+        if not frankfurtActive and frankfurtWasActive
+            frankfurtEndedThisBar := true
+        frankfurtWasActive := frankfurtActive
+
+        if londonActive and not londonWasActive
+            londonOpen := intraOpen
+            londonHigh := intraHigh
+            londonLow := intraLow
+            londonClose := intraClose
+            londonVolume := intraVolume
+            londonPv := (intraHigh + intraLow + intraClose) / 3.0 * intraVolume
+            londonStartTime := intraTime
+            londonEndTime := intraCloseTime
+            londonStartedThisBar := true
+        else if londonActive
+            londonHigh := math.max(londonHigh, intraHigh)
+            londonLow := math.min(londonLow, intraLow)
+            londonClose := intraClose
+            londonVolume += intraVolume
+            londonPv += (intraHigh + intraLow + intraClose) / 3.0 * intraVolume
+            londonEndTime := intraCloseTime
+        if not londonActive and londonWasActive
+            lastLondonHigh := londonHigh
+            lastLondonLow := londonLow
+            pushSample(londonRanges, rangePct(londonHigh, londonLow, londonOpen), statsLength)
+            pushSample(londonVolumes, londonVolume, statsLength)
+            londonEndedThisBar := true
+        londonWasActive := londonActive
+
+        if nyActive and not nyWasActive
+            nyOpen := intraOpen
+            nyHigh := intraHigh
+            nyLow := intraLow
+            nyClose := intraClose
+            nyVolume := intraVolume
+            nyPv := (intraHigh + intraLow + intraClose) / 3.0 * intraVolume
+            nyStartTime := intraTime
+            nyEndTime := intraCloseTime
+            nyStartedThisBar := true
+        else if nyActive
+            nyHigh := math.max(nyHigh, intraHigh)
+            nyLow := math.min(nyLow, intraLow)
+            nyClose := intraClose
+            nyVolume += intraVolume
+            nyPv += (intraHigh + intraLow + intraClose) / 3.0 * intraVolume
+            nyEndTime := intraCloseTime
+        if not nyActive and nyWasActive
+            pushSample(nyRanges, rangePct(nyHigh, nyLow, nyOpen), statsLength)
+            pushSample(nyVolumes, nyVolume, statsLength)
+            nyEndedThisBar := true
+        nyWasActive := nyActive
+
+inAsia = asiaWasActive
+inFrankfurt = frankfurtWasActive
+inLondon = londonWasActive
+inNy = nyWasActive
+
+[dailyOpen, dailyHigh, dailyLow, prevDailyHigh, prevDailyLow] = request.security(syminfo.tickerid, "D", [open, high, low, high[1], low[1]], barmerge.gaps_off, barmerge.lookahead_off)
+[weeklyOpen, prevWeeklyHigh, prevWeeklyLow] = request.security(syminfo.tickerid, "W", [open, high[1], low[1]], barmerge.gaps_off, barmerge.lookahead_off)
+[monthlyOpen, prevMonthlyHigh, prevMonthlyLow] = request.security(syminfo.tickerid, "M", [open, high[1], low[1]], barmerge.gaps_off, barmerge.lookahead_off)
+medianDailyRange = request.security(syminfo.tickerid, "D", ta.median(high - low, rangeLength)[1], barmerge.gaps_off, barmerge.lookahead_off)
+
+dayVwap = ta.vwap(hlc3)
+newWeek = timeframe.change("W")
+newMonth = timeframe.change("M")
+var float weekPv = na
+var float weekVol = na
+var float monthPv = na
+var float monthVol = na
+weekPv := newWeek ? hlc3 * volume : nz(weekPv) + hlc3 * volume
+weekVol := newWeek ? volume : nz(weekVol) + volume
+monthPv := newMonth ? hlc3 * volume : nz(monthPv) + hlc3 * volume
+monthVol := newMonth ? volume : nz(monthVol) + volume
+weekVwap = weekVol != 0 ? weekPv / weekVol : na
+monthVwap = monthVol != 0 ? monthPv / monthVol : na
+
+newTrackedSession = asiaStartedThisBar or frankfurtStartedThisBar or londonStartedThisBar or nyStartedThisBar
+inTrackedSession = inAsia or inFrankfurt or inLondon or inNy
+sessionVwap = inNy and nyVolume != 0 ? nyPv / nyVolume : inLondon and londonVolume != 0 ? londonPv / londonVolume : inFrankfurt and frankfurtVolume != 0 ? frankfurtPv / frankfurtVolume : inAsia and asiaVolume != 0 ? asiaPv / asiaVolume : na
+
+atr = ta.atr(atrLength)
+atrPct = close != 0 ? atr / close * 100.0 : na
+activeSessionRange = inNy ? nyHigh - nyLow : inLondon ? londonHigh - londonLow : inFrankfurt ? frankfurtHigh - frankfurtLow : inAsia ? asiaHigh - asiaLow : na
+dayRangeAtr = atr != 0 ? (dailyHigh - dailyLow) / atr : na
+sessionRangeAtr = atr != 0 ? activeSessionRange / atr : na
+dayRangeUsedPct = medianDailyRange != 0 ? (dailyHigh - dailyLow) / medianDailyRange * 100.0 : na
+activeMedianRange = inNy ? sampleMedian(nyRanges) : inLondon ? sampleMedian(londonRanges) : inAsia ? sampleMedian(asiaRanges) : na
+activeRangePct = inNy ? rangePct(nyHigh, nyLow, nyOpen) : inLondon ? rangePct(londonHigh, londonLow, londonOpen) : inAsia ? rangePct(asiaHigh, asiaLow, asiaOpen) : na
+sessionRangeUsedPct = activeMedianRange != 0 ? activeRangePct / activeMedianRange * 100.0 : na
+rvolBase = ta.sma(volume, rvolLength)
+rvol = rvolBase != 0 ? volume / rvolBase : na
+activeSessionVolume = inNy ? nyVolume : inLondon ? londonVolume : inAsia ? asiaVolume : na
+medianSessionVolume = inNy ? sampleMedian(nyVolumes) : inLondon ? sampleMedian(londonVolumes) : inAsia ? sampleMedian(asiaVolumes) : na
+sessionRvol = medianSessionVolume != 0 ? activeSessionVolume / medianSessionVolume : na
+
+londonSweepAsiaState = not na(lastAsiaHigh) and londonHigh > lastAsiaHigh and not na(lastAsiaLow) and londonLow < lastAsiaLow ? 3.0 : not na(lastAsiaHigh) and londonHigh > lastAsiaHigh ? 1.0 : not na(lastAsiaLow) and londonLow < lastAsiaLow ? 2.0 : 0.0
+nySweepLondonState = not na(lastLondonHigh) and nyHigh > lastLondonHigh and not na(lastLondonLow) and nyLow < lastLondonLow ? 3.0 : not na(lastLondonHigh) and nyHigh > lastLondonHigh ? 1.0 : not na(lastLondonLow) and nyLow < lastLondonLow ? 2.0 : 0.0
+
+pivotHigh = ta.pivothigh(high, structureLength, structureLength)
+pivotLow = ta.pivotlow(low, structureLength, structureLength)
+var float lastSwingHigh = na
+var float lastSwingLow = na
+var int lastSwingHighBar = na
+var int lastSwingLowBar = na
+var float previousPivotHigh = na
+var float previousPivotLow = na
+var bool lastSwingHighBroken = false
+var bool lastSwingLowBroken = false
+var float protectedHigh = na
+var float protectedLow = na
+var int protectedHighBar = na
+var int protectedLowBar = na
+var float lastBos = na
+var float lastChoch = na
+var int structureTrend = 0
+newHighClass = ""
+newLowClass = ""
+if not na(pivotHigh)
+    newHighClass := na(previousPivotHigh) ? "H" : pivotHigh > previousPivotHigh ? "HH" : "LH"
+    previousPivotHigh := pivotHigh
+    lastSwingHigh := pivotHigh
+    lastSwingHighBar := bar_index - structureLength
+    lastSwingHighBroken := false
+if not na(pivotLow)
+    newLowClass := na(previousPivotLow) ? "L" : pivotLow > previousPivotLow ? "HL" : "LL"
+    previousPivotLow := pivotLow
+    lastSwingLow := pivotLow
+    lastSwingLowBar := bar_index - structureLength
+    lastSwingLowBroken := false
+breakUp = false
+breakDown = false
+breakUpIsChoch = false
+breakDownIsChoch = false
+float breakLevel = na
+int breakOriginBar = na
+if structureTrend == 1
+    if breaksBelow(protectedLow)
+        breakDown := true
+        breakDownIsChoch := true
+        breakLevel := protectedLow
+        breakOriginBar := protectedLowBar
+        lastChoch := protectedLow
+        structureTrend := -1
+        protectedHigh := lastSwingHigh
+        protectedHighBar := lastSwingHighBar
+        lastSwingLowBroken := true
+    else if not lastSwingHighBroken and breaksAbove(lastSwingHigh)
+        breakUp := true
+        breakLevel := lastSwingHigh
+        breakOriginBar := lastSwingHighBar
+        lastBos := lastSwingHigh
+        lastSwingHighBroken := true
+        protectedLow := lastSwingLow
+        protectedLowBar := lastSwingLowBar
+else if structureTrend == -1
+    if breaksAbove(protectedHigh)
+        breakUp := true
+        breakUpIsChoch := true
+        breakLevel := protectedHigh
+        breakOriginBar := protectedHighBar
+        lastChoch := protectedHigh
+        structureTrend := 1
+        protectedLow := lastSwingLow
+        protectedLowBar := lastSwingLowBar
+        lastSwingHighBroken := true
+    else if not lastSwingLowBroken and breaksBelow(lastSwingLow)
+        breakDown := true
+        breakLevel := lastSwingLow
+        breakOriginBar := lastSwingLowBar
+        lastBos := lastSwingLow
+        lastSwingLowBroken := true
+        protectedHigh := lastSwingHigh
+        protectedHighBar := lastSwingHighBar
+else
+    neutralBreakUp = not lastSwingHighBroken and breaksAbove(lastSwingHigh)
+    neutralBreakDown = not lastSwingLowBroken and breaksBelow(lastSwingLow)
+    if neutralBreakUp and (not neutralBreakDown or close >= open)
+        breakUp := true
+        breakLevel := lastSwingHigh
+        breakOriginBar := lastSwingHighBar
+        lastBos := lastSwingHigh
+        lastSwingHighBroken := true
+        structureTrend := 1
+        protectedLow := lastSwingLow
+        protectedLowBar := lastSwingLowBar
+    else if neutralBreakDown
+        breakDown := true
+        breakLevel := lastSwingLow
+        breakOriginBar := lastSwingLowBar
+        lastBos := lastSwingLow
+        lastSwingLowBroken := true
+        structureTrend := -1
+        protectedHigh := lastSwingHigh
+        protectedHighBar := lastSwingHighBar
+
+internalPivotHigh = ta.pivothigh(high, internalStructureLength, internalStructureLength)
+internalPivotLow = ta.pivotlow(low, internalStructureLength, internalStructureLength)
+var float internalHigh = na
+var float internalLow = na
+var int internalHighBar = na
+var int internalLowBar = na
+var bool internalHighBroken = false
+var bool internalLowBroken = false
+var float internalProtectedHigh = na
+var float internalProtectedLow = na
+var int internalProtectedHighBar = na
+var int internalProtectedLowBar = na
+var int internalTrend = 0
+if not na(internalPivotHigh)
+    internalHigh := internalPivotHigh
+    internalHighBar := bar_index - internalStructureLength
+    internalHighBroken := false
+if not na(internalPivotLow)
+    internalLow := internalPivotLow
+    internalLowBar := bar_index - internalStructureLength
+    internalLowBroken := false
+internalBreakUp = false
+internalBreakDown = false
+internalBreakUpIsChoch = false
+internalBreakDownIsChoch = false
+float internalBreakLevel = na
+int internalBreakOriginBar = na
+if internalTrend == 1
+    if breaksBelow(internalProtectedLow)
+        internalBreakDown := true
+        internalBreakDownIsChoch := true
+        internalBreakLevel := internalProtectedLow
+        internalBreakOriginBar := internalProtectedLowBar
+        internalTrend := -1
+        internalProtectedHigh := internalHigh
+        internalProtectedHighBar := internalHighBar
+        internalLowBroken := true
+    else if not internalHighBroken and breaksAbove(internalHigh)
+        internalBreakUp := true
+        internalBreakLevel := internalHigh
+        internalBreakOriginBar := internalHighBar
+        internalHighBroken := true
+        internalProtectedLow := internalLow
+        internalProtectedLowBar := internalLowBar
+else if internalTrend == -1
+    if breaksAbove(internalProtectedHigh)
+        internalBreakUp := true
+        internalBreakUpIsChoch := true
+        internalBreakLevel := internalProtectedHigh
+        internalBreakOriginBar := internalProtectedHighBar
+        internalTrend := 1
+        internalProtectedLow := internalLow
+        internalProtectedLowBar := internalLowBar
+        internalHighBroken := true
+    else if not internalLowBroken and breaksBelow(internalLow)
+        internalBreakDown := true
+        internalBreakLevel := internalLow
+        internalBreakOriginBar := internalLowBar
+        internalLowBroken := true
+        internalProtectedHigh := internalHigh
+        internalProtectedHighBar := internalHighBar
+else
+    firstInternalUp = not internalHighBroken and breaksAbove(internalHigh)
+    firstInternalDown = not internalLowBroken and breaksBelow(internalLow)
+    if firstInternalUp and (not firstInternalDown or close >= open)
+        internalBreakUp := true
+        internalBreakLevel := internalHigh
+        internalBreakOriginBar := internalHighBar
+        internalHighBroken := true
+        internalTrend := 1
+        internalProtectedLow := internalLow
+        internalProtectedLowBar := internalLowBar
+    else if firstInternalDown
+        internalBreakDown := true
+        internalBreakLevel := internalLow
+        internalBreakOriginBar := internalLowBar
+        internalLowBroken := true
+        internalTrend := -1
+        internalProtectedHigh := internalHigh
+        internalProtectedHighBar := internalHighBar
+ema20 = ta.ema(close, 20)
+ema50 = ta.ema(close, 50)
+ema100 = ta.ema(close, 100)
+ema200 = ta.ema(close, 200)
+strongBull = close > ema20 and ema20 > ema50 and ema50 > ema100 and ema100 > ema200
+strongBear = close < ema20 and ema20 < ema50 and ema50 < ema100 and ema100 < ema200
+structureState = strongBull ? 2.0 : strongBear ? -2.0 : float(structureTrend)
+
+profileHigh = ta.highest(high, profileLookback)
+profileLow = ta.lowest(low, profileLookback)
+var float profilePoc = na
+var float profileVah = na
+var float profileVal = na
+if barstate.islast and profileHigh > profileLow
+    binSize = (profileHigh - profileLow) / profileBins
+    bins = array.new_float(profileBins, 0.0)
+    for offset = 0 to profileLookback - 1
+        if not na(close[offset])
+            binIndex = int(math.floor((close[offset] - profileLow) / binSize))
+            binIndex := math.max(0, math.min(profileBins - 1, binIndex))
+            array.set(bins, binIndex, array.get(bins, binIndex) + nz(volume[offset]))
+    pocIndex = 0
+    totalVolume = 0.0
+    for index = 0 to profileBins - 1
+        binVolume = array.get(bins, index)
+        totalVolume += binVolume
+        if binVolume > array.get(bins, pocIndex)
+            pocIndex := index
+    lowerIndex = pocIndex
+    upperIndex = pocIndex
+    includedVolume = array.get(bins, pocIndex)
+    targetVolume = totalVolume * valueAreaPercent / 100.0
+    while includedVolume < targetVolume and (lowerIndex > 0 or upperIndex < profileBins - 1)
+        lowerVolume = lowerIndex > 0 ? array.get(bins, lowerIndex - 1) : -1.0
+        upperVolume = upperIndex < profileBins - 1 ? array.get(bins, upperIndex + 1) : -1.0
+        if upperVolume >= lowerVolume
+            upperIndex += 1
+            includedVolume += upperVolume
+        else
+            lowerIndex -= 1
+            includedVolume += lowerVolume
+    profilePoc := profileLow + (pocIndex + 0.5) * binSize
+    profileVah := profileLow + (upperIndex + 1.0) * binSize
+    profileVal := profileLow + lowerIndex * binSize
+
+var array<box> sessionBoxes = array.new_box()
+var box asiaBox = na
+var box frankfurtBox = na
+var box londonBox = na
+var box nyBox = na
+if showSessions and asiaStartedThisBar
+    asiaBox := box.new(asiaStartTime, asiaHigh, asiaEndTime, asiaLow, xloc=xloc.bar_time, border_color=color.new(asiaColor, 35), bgcolor=color.new(asiaColor, 93), text="Asia", text_color=color.new(asiaColor, 0), text_size=size.tiny, text_halign=text.align_left, text_valign=text.align_top)
+    array.push(sessionBoxes, asiaBox)
+    trimBoxes(sessionBoxes, sessionHistory * 4)
+else if showSessions and (inAsia or asiaEndedThisBar) and not na(asiaBox)
+    box.set_top(asiaBox, asiaHigh)
+    box.set_bottom(asiaBox, asiaLow)
+    box.set_right(asiaBox, asiaEndTime)
+if showSessions and frankfurtStartedThisBar
+    frankfurtBox := box.new(frankfurtStartTime, frankfurtHigh, frankfurtEndTime, frankfurtLow, xloc=xloc.bar_time, border_color=color.new(frankfurtColor, 35), bgcolor=color.new(frankfurtColor, 93), text="Frankfurt", text_color=color.new(frankfurtColor, 0), text_size=size.tiny, text_halign=text.align_left, text_valign=text.align_top)
+    array.push(sessionBoxes, frankfurtBox)
+    trimBoxes(sessionBoxes, sessionHistory * 4)
+else if showSessions and (inFrankfurt or frankfurtEndedThisBar) and not na(frankfurtBox)
+    box.set_top(frankfurtBox, frankfurtHigh)
+    box.set_bottom(frankfurtBox, frankfurtLow)
+    box.set_right(frankfurtBox, frankfurtEndTime)
+if showSessions and londonStartedThisBar
+    londonBox := box.new(londonStartTime, londonHigh, londonEndTime, londonLow, xloc=xloc.bar_time, border_color=color.new(londonColor, 35), bgcolor=color.new(londonColor, 93), text="London", text_color=color.new(londonColor, 0), text_size=size.tiny, text_halign=text.align_left, text_valign=text.align_top)
+    array.push(sessionBoxes, londonBox)
+    trimBoxes(sessionBoxes, sessionHistory * 4)
+else if showSessions and (inLondon or londonEndedThisBar) and not na(londonBox)
+    box.set_top(londonBox, londonHigh)
+    box.set_bottom(londonBox, londonLow)
+    box.set_right(londonBox, londonEndTime)
+if showSessions and nyStartedThisBar
+    nyBox := box.new(nyStartTime, nyHigh, nyEndTime, nyLow, xloc=xloc.bar_time, border_color=color.new(nyColor, 35), bgcolor=color.new(nyColor, 93), text="New York", text_color=color.new(nyColor, 0), text_size=size.tiny, text_halign=text.align_left, text_valign=text.align_top)
+    array.push(sessionBoxes, nyBox)
+    trimBoxes(sessionBoxes, sessionHistory * 4)
+else if showSessions and (inNy or nyEndedThisBar) and not na(nyBox)
+    box.set_top(nyBox, nyHigh)
+    box.set_bottom(nyBox, nyLow)
+    box.set_right(nyBox, nyEndTime)
+
+var array<box> fvgBoxes = array.new_box()
+var array<int> fvgDirections = array.new_int()
+var array<int> fvgStates = array.new_int()
+var array<float> fvgMitigationLevels = array.new_float()
+if showFvg and bar_index >= 2
+    middleBody = math.abs(close[1] - open[1])
+    bullishGapSize = low - high[2]
+    bearishGapSize = low[2] - high
+    bullishFvg = low > high[2] and close[1] > open[1] and bullishGapSize >= atr[1] * fvgMinimumAtr and middleBody >= atr[1] * displacementMinimumAtr
+    bearishFvg = high < low[2] and close[1] < open[1] and bearishGapSize >= atr[1] * fvgMinimumAtr and middleBody >= atr[1] * displacementMinimumAtr
+    if bullishFvg or bearishFvg
+        fvgTop = bullishFvg ? low : low[2]
+        fvgBottom = bullishFvg ? high[2] : high
+        mitigationLevel = bullishFvg ? fvgTop - (fvgTop - fvgBottom) * fvgMitigationPercent / 100.0 : fvgBottom + (fvgTop - fvgBottom) * fvgMitigationPercent / 100.0
+        fvgColor = bullishFvg ? color.rgb(76, 175, 80) : color.rgb(239, 83, 80)
+        fvgBox = box.new(bar_index - 2, fvgTop, bar_index, fvgBottom, extend=extend.right, border_color=color.new(fvgColor, 82), bgcolor=color.new(fvgColor, 93), text="FVG", text_color=color.new(fvgColor, 25), text_size=size.tiny, text_halign=text.align_left, text_valign=text.align_top)
+        array.push(fvgBoxes, fvgBox)
+        array.push(fvgDirections, bullishFvg ? 1 : -1)
+        array.push(fvgStates, 0)
+        array.push(fvgMitigationLevels, mitigationLevel)
+        while array.size(fvgBoxes) > zoneHistory
+            box.delete(array.shift(fvgBoxes))
+            array.shift(fvgDirections)
+            array.shift(fvgStates)
+            array.shift(fvgMitigationLevels)
+if array.size(fvgBoxes) > 0
+    for index = 0 to array.size(fvgBoxes) - 1
+        if array.get(fvgStates, index) == 0
+            activeFvg = array.get(fvgBoxes, index)
+            fvgDirection = array.get(fvgDirections, index)
+            mitigationLevel = array.get(fvgMitigationLevels, index)
+            if bar_index > box.get_right(activeFvg)
+                fvgMitigated = fvgDirection == 1 ? low <= mitigationLevel : high >= mitigationLevel
+                if fvgMitigated
+                    box.set_extend(activeFvg, extend.none)
+                    box.set_right(activeFvg, bar_index)
+                    box.set_bgcolor(activeFvg, color.new(color.gray, 100))
+                    box.set_border_color(activeFvg, color.new(color.gray, 100))
+                    box.set_text(activeFvg, "")
+                    array.set(fvgStates, index, 1)
+                else if fvgDirection == 1 and low < box.get_top(activeFvg)
+                    box.set_top(activeFvg, math.max(box.get_bottom(activeFvg), low))
+                else if fvgDirection == -1 and high > box.get_bottom(activeFvg)
+                    box.set_bottom(activeFvg, math.min(box.get_top(activeFvg), high))
+
+var array<box> structureBlocks = array.new_box()
+var array<int> blockDirections = array.new_int()
+var array<int> blockStates = array.new_int()
+if array.size(structureBlocks) > 0
+    for index = 0 to array.size(structureBlocks) - 1
+        activeBlock = array.get(structureBlocks, index)
+        blockDirection = array.get(blockDirections, index)
+        blockState = array.get(blockStates, index)
+        if blockState == 0
+            orderBlockInvalid = blockDirection == 1 ? close < box.get_bottom(activeBlock) : close > box.get_top(activeBlock)
+            if orderBlockInvalid
+                strongInvalidation = math.abs(close - open) >= atr * displacementMinimumAtr
+                if strongInvalidation
+                    breakerColor = color.rgb(245, 166, 35)
+                    array.set(blockDirections, index, -blockDirection)
+                    array.set(blockStates, index, 1)
+                    box.set_bgcolor(activeBlock, color.new(breakerColor, 90))
+                    box.set_border_color(activeBlock, color.new(breakerColor, 55))
+                    box.set_text(activeBlock, "BB")
+                    box.set_text_color(activeBlock, color.new(breakerColor, 5))
+                else
+                    box.set_extend(activeBlock, extend.none)
+                    box.set_right(activeBlock, bar_index)
+                    box.set_bgcolor(activeBlock, color.new(color.gray, 100))
+                    box.set_border_color(activeBlock, color.new(color.gray, 100))
+                    box.set_text(activeBlock, "")
+                    array.set(blockStates, index, 2)
+        else if blockState == 1
+            breakerInvalid = blockDirection == 1 ? close < box.get_bottom(activeBlock) : close > box.get_top(activeBlock)
+            if breakerInvalid
+                box.set_extend(activeBlock, extend.none)
+                box.set_right(activeBlock, bar_index)
+                box.set_bgcolor(activeBlock, color.new(color.gray, 100))
+                box.set_border_color(activeBlock, color.new(color.gray, 100))
+                box.set_text(activeBlock, "")
+                array.set(blockStates, index, 2)
+qualifiedStructureBreak = (breakUp or breakDown) and math.abs(close - open) >= atr * displacementMinimumAtr
+if showBlocks and qualifiedStructureBreak and not na(breakOriginBar)
+    blockDirection = breakUp ? 1 : -1
+    int blockOffset = na
+    availableBlockBars = math.min(blockLookback, bar_index - breakOriginBar)
+    if availableBlockBars >= 1
+        for offset = 1 to availableBlockBars
+            oppositeCandle = blockDirection == 1 ? close[offset] < open[offset] : close[offset] > open[offset]
+            if oppositeCandle
+                blockOffset := offset
+                break
+    if not na(blockOffset)
+        orderBlockColor = color.rgb(66, 108, 210)
+        blockTop = orderBlockRange == "Wick" ? high[blockOffset] : math.max(open[blockOffset], close[blockOffset])
+        blockBottom = orderBlockRange == "Wick" ? low[blockOffset] : math.min(open[blockOffset], close[blockOffset])
+        orderBlock = box.new(bar_index - blockOffset, blockTop, bar_index, blockBottom, extend=extend.right, border_color=color.new(orderBlockColor, 55), bgcolor=color.new(orderBlockColor, 91), text="OB", text_color=color.new(orderBlockColor, 0), text_size=size.tiny, text_halign=text.align_left, text_valign=text.align_top)
+        array.push(structureBlocks, orderBlock)
+        array.push(blockDirections, blockDirection)
+        array.push(blockStates, 0)
+        while array.size(structureBlocks) > zoneHistory
+            box.delete(array.shift(structureBlocks))
+            array.shift(blockDirections)
+            array.shift(blockStates)
+
+var array<line> dayVwapLines = array.new_line()
+var array<line> weekVwapLines = array.new_line()
+var array<line> monthVwapLines = array.new_line()
+var array<line> sessionVwapLines = array.new_line()
+if showVwaps and bar_index > 0
+    if timeframe.change("D")
+        clearLines(dayVwapLines)
+    else if showDailyVwap and not na(dayVwap) and not na(dayVwap[1])
+        array.push(dayVwapLines, line.new(bar_index - 1, dayVwap[1], bar_index, dayVwap, color=color.new(color.yellow, 10), width=2))
+    if newWeek
+        clearLines(weekVwapLines)
+    else if showWeeklyVwap and not na(weekVwap) and not na(weekVwap[1])
+        array.push(weekVwapLines, line.new(bar_index - 1, weekVwap[1], bar_index, weekVwap, color=color.new(color.aqua, 20)))
+    if newMonth
+        clearLines(monthVwapLines)
+    else if showMonthlyVwap and not na(monthVwap) and not na(monthVwap[1])
+        array.push(monthVwapLines, line.new(bar_index - 1, monthVwap[1], bar_index, monthVwap, color=color.new(color.fuchsia, 25)))
+    if newTrackedSession
+        clearLines(sessionVwapLines)
+    else if showSessionVwap and inTrackedSession and inTrackedSession[1] and not na(sessionVwap) and not na(sessionVwap[1])
+        array.push(sessionVwapLines, line.new(bar_index - 1, sessionVwap[1], bar_index, sessionVwap, color=color.new(chart.fg_color, 35)))
+    trimLines(dayVwapLines, vwapTrailBars)
+    trimLines(weekVwapLines, vwapTrailBars)
+    trimLines(monthVwapLines, vwapTrailBars)
+    trimLines(sessionVwapLines, vwapTrailBars)
+
+var array<line> structureLines = array.new_line()
+var array<label> structureLabels = array.new_label()
+if showSwingLabels and newHighClass != ""
+    highClassColor = newHighClass == "HH" ? color.green : newHighClass == "LH" ? color.red : color.gray
+    highClassLabel = label.new(bar_index - structureLength, pivotHigh + nz(atr[structureLength], atr) * 0.08, newHighClass, style=label.style_none, textcolor=highClassColor, size=size.tiny)
+    array.push(structureLabels, highClassLabel)
+    trimLabels(structureLabels, 60)
+if showSwingLabels and newLowClass != ""
+    lowClassColor = newLowClass == "HL" ? color.green : newLowClass == "LL" ? color.red : color.gray
+    lowClassLabel = label.new(bar_index - structureLength, pivotLow - nz(atr[structureLength], atr) * 0.08, newLowClass, style=label.style_none, textcolor=lowClassColor, size=size.tiny)
+    array.push(structureLabels, lowClassLabel)
+    trimLabels(structureLabels, 60)
+if showStructure and breakUp and not na(breakOriginBar)
+    upColor = color.new(color.green, breakUpIsChoch ? 0 : 15)
+    upLine = line.new(breakOriginBar, breakLevel, bar_index, breakLevel, color=upColor, width=1)
+    upLabel = label.new(int(math.avg(breakOriginBar, bar_index)), breakLevel + atr * 0.035, breakUpIsChoch ? "ChoCH" : "BOS", style=label.style_none, textcolor=upColor, size=size.tiny)
+    array.push(structureLines, upLine)
+    array.push(structureLabels, upLabel)
+    trimLines(structureLines, 20)
+    trimLabels(structureLabels, 60)
+if showStructure and breakDown and not na(breakOriginBar)
+    downColor = color.new(color.red, breakDownIsChoch ? 0 : 15)
+    downLine = line.new(breakOriginBar, breakLevel, bar_index, breakLevel, color=downColor, width=1)
+    downLabel = label.new(int(math.avg(breakOriginBar, bar_index)), breakLevel - atr * 0.035, breakDownIsChoch ? "ChoCH" : "BOS", style=label.style_none, textcolor=downColor, size=size.tiny)
+    array.push(structureLines, downLine)
+    array.push(structureLabels, downLabel)
+    trimLines(structureLines, 20)
+    trimLabels(structureLabels, 60)
+if showInternalStructure and internalBreakUp and not na(internalBreakOriginBar)
+    internalUpColor = color.new(color.teal, 35)
+    internalUpLine = line.new(internalBreakOriginBar, internalBreakLevel, bar_index, internalBreakLevel, color=internalUpColor, style=line.style_dotted)
+    internalUpLabel = label.new(int(math.avg(internalBreakOriginBar, bar_index)), internalBreakLevel + atr * 0.02, internalBreakUpIsChoch ? "iChoCH" : "iBOS", style=label.style_none, textcolor=internalUpColor, size=size.tiny)
+    array.push(structureLines, internalUpLine)
+    array.push(structureLabels, internalUpLabel)
+    trimLines(structureLines, 30)
+    trimLabels(structureLabels, 80)
+if showInternalStructure and internalBreakDown and not na(internalBreakOriginBar)
+    internalDownColor = color.new(color.purple, 35)
+    internalDownLine = line.new(internalBreakOriginBar, internalBreakLevel, bar_index, internalBreakLevel, color=internalDownColor, style=line.style_dotted)
+    internalDownLabel = label.new(int(math.avg(internalBreakOriginBar, bar_index)), internalBreakLevel - atr * 0.02, internalBreakDownIsChoch ? "iChoCH" : "iBOS", style=label.style_none, textcolor=internalDownColor, size=size.tiny)
+    array.push(structureLines, internalDownLine)
+    array.push(structureLabels, internalDownLabel)
+    trimLines(structureLines, 30)
+    trimLabels(structureLabels, 80)
+
+var line doLine = na
+var line pdhLine = na
+var line pdlLine = na
+var line woLine = na
+var line pwhLine = na
+var line pwlLine = na
+var line moLine = na
+var line pmhLine = na
+var line pmlLine = na
+var line pocLine = na
+var line vahLine = na
+var line valLine = na
+var label doTag = na
+var label pdhTag = na
+var label pdlTag = na
+var label woTag = na
+var label pwhTag = na
+var label pwlTag = na
+var label moTag = na
+var label pmhTag = na
+var label pmlTag = na
+var label pocTag = na
+var label vahTag = na
+var label valTag = na
+dayStartBar = nz(ta.valuewhen(timeframe.change("D"), bar_index, 0), bar_index - 1)
+weekStartBar = nz(ta.valuewhen(timeframe.change("W"), bar_index, 0), bar_index - 1)
+monthStartBar = nz(ta.valuewhen(timeframe.change("M"), bar_index, 0), bar_index - 1)
+profileStartBar = math.max(0, bar_index - profileLookback + 1)
+if barstate.islast
+    if showLevels
+        doLine := levelLine(doLine, dailyOpen, dayStartBar, color.blue, line.style_solid, 2)
+        pdhLine := levelLine(pdhLine, prevDailyHigh, dayStartBar, color.green, line.style_solid, 1)
+        pdlLine := levelLine(pdlLine, prevDailyLow, dayStartBar, color.red, line.style_solid, 1)
+        woLine := levelLine(woLine, weeklyOpen, weekStartBar, color.aqua, line.style_dashed, 2)
+        pwhLine := levelLine(pwhLine, prevWeeklyHigh, weekStartBar, color.new(color.green, 25), line.style_dashed, 1)
+        pwlLine := levelLine(pwlLine, prevWeeklyLow, weekStartBar, color.new(color.red, 25), line.style_dashed, 1)
+        moLine := levelLine(moLine, monthlyOpen, monthStartBar, color.fuchsia, line.style_dotted, 2)
+        pmhLine := levelLine(pmhLine, prevMonthlyHigh, monthStartBar, color.new(color.green, 50), line.style_dotted, 1)
+        pmlLine := levelLine(pmlLine, prevMonthlyLow, monthStartBar, color.new(color.red, 50), line.style_dotted, 1)
+        doTag := levelTag(doTag, dailyOpen, "DO", color.blue)
+        pdhTag := levelTag(pdhTag, prevDailyHigh, "PDH", color.green)
+        pdlTag := levelTag(pdlTag, prevDailyLow, "PDL", color.red)
+        woTag := levelTag(woTag, weeklyOpen, "WO", color.aqua)
+        pwhTag := levelTag(pwhTag, prevWeeklyHigh, "PWH", color.green)
+        pwlTag := levelTag(pwlTag, prevWeeklyLow, "PWL", color.red)
+        moTag := levelTag(moTag, monthlyOpen, "MO", color.fuchsia)
+        pmhTag := levelTag(pmhTag, prevMonthlyHigh, "PMH", color.green)
+        pmlTag := levelTag(pmlTag, prevMonthlyLow, "PML", color.red)
+    if showProfile
+        pocLine := levelLine(pocLine, profilePoc, profileStartBar, color.orange, line.style_solid, 2)
+        vahLine := levelLine(vahLine, profileVah, profileStartBar, color.new(color.orange, 35), line.style_dashed, 1)
+        valLine := levelLine(valLine, profileVal, profileStartBar, color.new(color.orange, 35), line.style_dashed, 1)
+        pocTag := levelTag(pocTag, profilePoc, "POC", color.orange)
+        vahTag := levelTag(vahTag, profileVah, "VAH", color.orange)
+        valTag := levelTag(valTag, profileVal, "VAL", color.orange)
+
+var table dashboard = table.new(position.top_right, 2, 10, border_width=1, border_color=color.new(color.gray, 70), bgcolor=color.new(color.black, 18))
+if barstate.islast and showDashboard
+    activeSessionName = inNy ? "New York" : inLondon ? "London" : inFrankfurt ? "Frankfurt" : inAsia ? "Asia" : "None"
+    structureName = structureState == 2 ? "Strong bullish" : structureState == 1 ? "Bullish" : structureState == -2 ? "Strong bearish" : structureState == -1 ? "Bearish" : "Range"
+    table.cell(dashboard, 0, 0, "Market context", text_color=color.white, bgcolor=color.new(color.blue, 55))
+    table.cell(dashboard, 1, 0, syminfo.ticker, text_color=color.white, bgcolor=color.new(color.blue, 55))
+    table.cell(dashboard, 0, 1, "Session", text_color=color.silver)
+    table.cell(dashboard, 1, 1, activeSessionName, text_color=color.white)
+    table.cell(dashboard, 0, 2, "ATR %", text_color=color.silver)
+    table.cell(dashboard, 1, 2, numberText(atrPct, "#.##"), text_color=color.white)
+    table.cell(dashboard, 0, 3, "RVOL", text_color=color.silver)
+    table.cell(dashboard, 1, 3, numberText(rvol, "#.##"), text_color=color.white)
+    table.cell(dashboard, 0, 4, "Day range used", text_color=color.silver)
+    table.cell(dashboard, 1, 4, na(dayRangeUsedPct) ? "-" : numberText(dayRangeUsedPct, "#.0") + "%", text_color=color.white)
+    table.cell(dashboard, 0, 5, "Session range", text_color=color.silver)
+    table.cell(dashboard, 1, 5, na(sessionRangeUsedPct) ? "-" : numberText(sessionRangeUsedPct, "#.0") + "%", text_color=color.white)
+    table.cell(dashboard, 0, 6, "Daily VWAP", text_color=color.silver)
+    table.cell(dashboard, 1, 6, str.tostring(dayVwap, format.mintick), text_color=color.yellow)
+    table.cell(dashboard, 0, 7, "Profile POC (approx)", text_color=color.silver)
+    table.cell(dashboard, 1, 7, exportApproximateProfile ? str.tostring(profilePoc, format.mintick) : "Disabled", text_color=exportApproximateProfile ? color.orange : color.silver)
+    table.cell(dashboard, 0, 8, "Structure", text_color=color.silver)
+    table.cell(dashboard, 1, 8, structureName, text_color=structureState > 0 ? color.green : structureState < 0 ? color.red : color.silver)
+    table.cell(dashboard, 0, 9, "PDH / PDL dist", text_color=color.silver)
+    table.cell(dashboard, 1, 9, str.tostring(distancePct(prevDailyHigh), "#.##") + "% / " + str.tostring(distancePct(prevDailyLow), "#.##") + "%", text_color=color.white)
+
+telemetryDisplay = display.data_window
+plot(onlyCurrent(2), "CTX|META|SCHEMA", display=telemetryDisplay)
+plot(onlyCurrent(1), "CTX|META|CURRENT_ONLY", display=telemetryDisplay)
+plot(onlyCurrent(time), "CTX|META|BAR_TIME", display=telemetryDisplay)
+plot(onlyCurrent(boolValue(barstate.isconfirmed)), "CTX|META|BAR_CONFIRMED", display=telemetryDisplay)
+plot(onlyCurrent(close), "CTX|PRICE|CLOSE", display=telemetryDisplay)
+plot(onlyCurrent(atr), "CTX|VOLATILITY|ATR", display=telemetryDisplay)
+plot(onlyCurrent(atrPct), "CTX|VOLATILITY|ATR_PCT", display=telemetryDisplay)
+plot(onlyCurrent(dayRangeAtr), "CTX|VOLATILITY|DAY_RANGE_ATR", display=telemetryDisplay)
+plot(onlyCurrent(sessionRangeAtr), "CTX|VOLATILITY|SESSION_RANGE_ATR", display=telemetryDisplay)
+plot(onlyCurrent(dailyOpen), "CTX|LEVEL|DO", display=telemetryDisplay)
+plot(onlyCurrent(prevDailyHigh), "CTX|LEVEL|PDH", display=telemetryDisplay)
+plot(onlyCurrent(prevDailyLow), "CTX|LEVEL|PDL", display=telemetryDisplay)
+plot(onlyCurrent(weeklyOpen), "CTX|LEVEL|WO", display=telemetryDisplay)
+plot(onlyCurrent(prevWeeklyHigh), "CTX|LEVEL|PWH", display=telemetryDisplay)
+plot(onlyCurrent(prevWeeklyLow), "CTX|LEVEL|PWL", display=telemetryDisplay)
+plot(onlyCurrent(monthlyOpen), "CTX|LEVEL|MO", display=telemetryDisplay)
+plot(onlyCurrent(prevMonthlyHigh), "CTX|LEVEL|PMH", display=telemetryDisplay)
+plot(onlyCurrent(prevMonthlyLow), "CTX|LEVEL|PML", display=telemetryDisplay)
+plot(onlyCurrent(distancePct(prevDailyHigh)), "CTX|DIST|PDH|PCT", display=telemetryDisplay)
+plot(onlyCurrent(distancePct(prevDailyLow)), "CTX|DIST|PDL|PCT", display=telemetryDisplay)
+plot(onlyCurrent(asiaOpen), "CTX|SESSION|ASIA|OPEN", display=telemetryDisplay)
+plot(onlyCurrent(asiaHigh), "CTX|SESSION|ASIA|HIGH", display=telemetryDisplay)
+plot(onlyCurrent(asiaLow), "CTX|SESSION|ASIA|LOW", display=telemetryDisplay)
+plot(onlyCurrent(rangePct(asiaHigh, asiaLow, asiaOpen)), "CTX|SESSION|ASIA|RANGE_PCT", display=telemetryDisplay)
+plot(onlyCurrent(returnPct(asiaClose, asiaOpen)), "CTX|SESSION|ASIA|RETURN_PCT", display=telemetryDisplay)
+plot(onlyCurrent(boolValue(inAsia)), "CTX|SESSION|ASIA|ACTIVE", display=telemetryDisplay)
+plot(onlyCurrent(frankfurtOpen), "CTX|SESSION|FRANKFURT|OPEN", display=telemetryDisplay)
+plot(onlyCurrent(frankfurtHigh), "CTX|SESSION|FRANKFURT|HIGH", display=telemetryDisplay)
+plot(onlyCurrent(frankfurtLow), "CTX|SESSION|FRANKFURT|LOW", display=telemetryDisplay)
+plot(onlyCurrent(rangePct(frankfurtHigh, frankfurtLow, frankfurtOpen)), "CTX|SESSION|FRANKFURT|RANGE_PCT", display=telemetryDisplay)
+plot(onlyCurrent(boolValue(inFrankfurt)), "CTX|SESSION|FRANKFURT|ACTIVE", display=telemetryDisplay)
+plot(onlyCurrent(londonOpen), "CTX|SESSION|LONDON|OPEN", display=telemetryDisplay)
+plot(onlyCurrent(londonHigh), "CTX|SESSION|LONDON|HIGH", display=telemetryDisplay)
+plot(onlyCurrent(londonLow), "CTX|SESSION|LONDON|LOW", display=telemetryDisplay)
+plot(onlyCurrent(rangePct(londonHigh, londonLow, londonOpen)), "CTX|SESSION|LONDON|RANGE_PCT", display=telemetryDisplay)
+plot(onlyCurrent(returnPct(londonClose, londonOpen)), "CTX|SESSION|LONDON|RETURN_PCT", display=telemetryDisplay)
+plot(onlyCurrent(boolValue(inLondon)), "CTX|SESSION|LONDON|ACTIVE", display=telemetryDisplay)
+plot(onlyCurrent(londonSweepAsiaState), "CTX|SESSION|LONDON|SWEEP_ASIA_STATE", display=telemetryDisplay)
+plot(onlyCurrent(nyOpen), "CTX|SESSION|NY|OPEN", display=telemetryDisplay)
+plot(onlyCurrent(nyHigh), "CTX|SESSION|NY|HIGH", display=telemetryDisplay)
+plot(onlyCurrent(nyLow), "CTX|SESSION|NY|LOW", display=telemetryDisplay)
+plot(onlyCurrent(rangePct(nyHigh, nyLow, nyOpen)), "CTX|SESSION|NY|RANGE_PCT", display=telemetryDisplay)
+plot(onlyCurrent(returnPct(nyClose, nyOpen)), "CTX|SESSION|NY|RETURN_PCT", display=telemetryDisplay)
+plot(onlyCurrent(boolValue(inNy)), "CTX|SESSION|NY|ACTIVE", display=telemetryDisplay)
+plot(onlyCurrent(nySweepLondonState), "CTX|SESSION|NY|SWEEP_LONDON_STATE", display=telemetryDisplay)
+plot(onlyCurrent(dayVwap), "CTX|VWAP|DAY", display=telemetryDisplay)
+plot(onlyCurrent(weekVwap), "CTX|VWAP|WEEK", display=telemetryDisplay)
+plot(onlyCurrent(monthVwap), "CTX|VWAP|MONTH", display=telemetryDisplay)
+plot(onlyCurrent(sessionVwap), "CTX|VWAP|SESSION", display=telemetryDisplay)
+plot(onlyCurrent(rvol), "CTX|VOL|RVOL", display=telemetryDisplay)
+plot(onlyCurrent(sessionRvol), "CTX|VOL|SESSION_RVOL", display=telemetryDisplay)
+plot(onlyCurrent(dayRangeUsedPct), "CTX|RANGE|DAY_USED_PCT", display=telemetryDisplay)
+plot(onlyCurrent(sessionRangeUsedPct), "CTX|RANGE|SESSION_USED_PCT", display=telemetryDisplay)
+plot(onlyCurrent(exportApproximateProfile ? profilePoc : na), "CTX|VP|FIXED|POC", display=telemetryDisplay)
+plot(onlyCurrent(exportApproximateProfile ? profileVah : na), "CTX|VP|FIXED|VAH", display=telemetryDisplay)
+plot(onlyCurrent(exportApproximateProfile ? profileVal : na), "CTX|VP|FIXED|VAL", display=telemetryDisplay)
+plot(onlyCurrent(sampleMedian(asiaRanges)), "CTX|STAT|ASIA|MED_RANGE_PCT", display=telemetryDisplay)
+plot(onlyCurrent(sampleMedian(londonRanges)), "CTX|STAT|LONDON|MED_RANGE_PCT", display=telemetryDisplay)
+plot(onlyCurrent(sampleMedian(nyRanges)), "CTX|STAT|NY|MED_RANGE_PCT", display=telemetryDisplay)
+plot(onlyCurrent(structureState), "CTX|STRUCT|STATE", display=telemetryDisplay)
+plot(onlyCurrent(lastSwingHigh), "CTX|STRUCT|LAST_SWING_HIGH", display=telemetryDisplay)
+plot(onlyCurrent(lastSwingLow), "CTX|STRUCT|LAST_SWING_LOW", display=telemetryDisplay)
+plot(onlyCurrent(lastBos), "CTX|STRUCT|LAST_BOS", display=telemetryDisplay)
+plot(onlyCurrent(lastChoch), "CTX|STRUCT|LAST_CHOCH", display=telemetryDisplay)

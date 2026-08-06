@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ChatGPT Composer Fixture</title>
+</head>
+<body>
+  <!-- ChatGPT composer -->
+  <div class="relative" data-testid="conversation-turn">
+    <div class="group relative flex h-full w-0 flex-1 grow">
+      <textarea 
+        contenteditable="true" 
+        role="textbox"
+        aria-label="Send a message"
+        placeholder="Send a message"
+        class="w-full"
+      ></textarea>
+    </div>
+  </div>
+
+  <!-- Attachment button -->
+  <button type="button" aria-label="Attach files">
+    <svg><!-- attachment icon --></svg>
+  </button>
+
+  <script>
+    window.fixtureData = {
+      platform: 'ChatGPT',
+      composerSelector: '[contenteditable="true"]',
+      hasAttachments: true
+    };
+  </script>
+</body>
+</html>

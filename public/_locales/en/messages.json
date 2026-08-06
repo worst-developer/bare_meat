@@ -1,0 +1,14 @@
+{
+  "extName": {
+    "message": "bare meat🧸🥩",
+    "description": "Name of the extension"
+  },
+  "extShortName": {
+    "message": "bare meat🧸🥩",
+    "description": "Short name of the extension"
+  },
+  "extDescription": {
+    "message": "bare meat🧸🥩 dispatches TradingView screenshots to multiple AI chat platforms",
+    "description": "Extension description"
+  }
+}

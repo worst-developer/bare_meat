@@ -1,0 +1,32 @@
+{
+  "name": "bare-meat",
+  "displayName": "bare meat🧸🥩",
+  "version": "0.4.0",
+  "description": "__MSG_extDescription__",
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "dev:chrome": "wxt -b chrome",
+    "build": "wxt build",
+    "build:chrome": "wxt build -b chrome",
+    "zip": "wxt zip",
+    "prepare": "wxt prepare",
+    "postinstall": "wxt prepare",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "idb": "^8.0.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.289",
+    "@types/node": "^22.15.12",
+    "@types/react": "^18.3.23",
+    "@types/react-dom": "^18.3.7",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vitest": "^4.1.10",
+    "wxt": "^0.21.3"
+  }
+}
