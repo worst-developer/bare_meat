@@ -29,11 +29,11 @@ cmeEnabled = input.bool(false, "CME gap telemetry", group=groupCme)
 cmeTicker = input.symbol("CME:BTC1!", "CME ticker", group=groupCme)
 structureLength = input.int(5, "Swing length", minval=1, group=groupTechnical)
 breakConfirmation = input.string("Close", "Break confirmation", options=["Close", "Wick"], group=groupTechnical)
-asiaSession = input.session("0900-1500:1234567", "Asia", inline="asia", group=groupStats)
+asiaSession = input.session("0900-1500:23456", "Asia", inline="asia", group=groupStats)
 asiaTimezone = input.string("Asia/Tokyo", "", inline="asia", group=groupStats)
-londonSession = input.session("0800-1200:1234567", "London", inline="london", group=groupStats)
+londonSession = input.session("0800-1200:23456", "London", inline="london", group=groupStats)
 londonTimezone = input.string("Europe/London", "", inline="london", group=groupStats)
-nySession = input.session("0930-1600:1234567", "New York", inline="ny", group=groupStats)
+nySession = input.session("0930-1600:23456", "New York", inline="ny", group=groupStats)
 nyTimezone = input.string("America/New_York", "", inline="ny", group=groupStats)
 statsLength = input.int(10, "Completed sessions", options=[5, 10, 20], group=groupStats)
 showCrossDashboard = input.bool(true, "Show cross-market dashboard", group=groupVisual)
@@ -52,6 +52,10 @@ pushSample(array<float> samples, float value, int limit) =>
 sampleRate(array<float> samples) => array.size(samples) > 0 ? array.avg(samples) * 100.0 : na
 breaksAbove(float level) => not na(level) and (breakConfirmation == "Close" ? close > level and close[1] <= level : high > level and high[1] <= level)
 breaksBelow(float level) => not na(level) and (breakConfirmation == "Close" ? close < level and close[1] >= level : low < level and low[1] >= level)
+isWeekday(sessionTimezone) =>
+    localDay = dayofweek(time, sessionTimezone)
+    localDay != dayofweek.saturday and localDay != dayofweek.sunday
+sessionActive(sessionValue, sessionTimezone) => isWeekday(sessionTimezone) and not na(time(timeframe.period, sessionValue, sessionTimezone))
 
 marketData(ticker) =>
     marketClose = request.security(ticker, timeframe.period, close, barmerge.gaps_off, barmerge.lookahead_off)
@@ -176,9 +180,9 @@ swingLowVwap = not na(swingLowBaseVolume) and cumVolume != swingLowBaseVolume ? 
 dayVwap = ta.vwap(hlc3)
 dayVwapDistance = close != 0 ? (dayVwap - close) / close * 100.0 : na
 
-inAsia = not na(time(timeframe.period, asiaSession, asiaTimezone))
-inLondon = not na(time(timeframe.period, londonSession, londonTimezone))
-inNy = not na(time(timeframe.period, nySession, nyTimezone))
+inAsia = sessionActive(asiaSession, asiaTimezone)
+inLondon = sessionActive(londonSession, londonTimezone)
+inNy = sessionActive(nySession, nyTimezone)
 var float asiaHigh = na
 var float asiaLow = na
 var float previousAsiaHigh = na

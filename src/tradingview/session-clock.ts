@@ -24,11 +24,13 @@ export function sessionStatus(session: MarketSession, now: Date): SessionStatus 
   const localMinutes = parts.hour * 60 + parts.minute + parts.second / 60;
   const startMinutes = session.startHour * 60 + session.startMinute;
   const endMinutes = session.endHour * 60 + session.endMinute;
-  const active = localMinutes >= startMinutes && localMinutes < endMinutes;
+  const isWeekday = isWeekdayDate(parts.year, parts.month, parts.day);
+  const active = isWeekday && localMinutes >= startMinutes && localMinutes < endMinutes;
   const close = zonedTimeToUtc(session.timeZone, parts.year, parts.month, parts.day, session.endHour, session.endMinute, 0);
-  const open = active || localMinutes < startMinutes
+  const openDayOffset = nextOpenDayOffset(parts.year, parts.month, parts.day, isWeekday && localMinutes < startMinutes);
+  const open = active
     ? zonedTimeToUtc(session.timeZone, parts.year, parts.month, parts.day, session.startHour, session.startMinute, 0)
-    : zonedTimeToUtc(session.timeZone, parts.year, parts.month, parts.day + 1, session.startHour, session.startMinute, 0);
+    : zonedTimeToUtc(session.timeZone, parts.year, parts.month, parts.day + openDayOffset, session.startHour, session.startMinute, 0);
 
   return {
     key: session.key,
@@ -101,6 +103,17 @@ function timeZoneOffsetMs(date: Date, timeZone: string): number {
   const parts = zonedParts(date, timeZone);
   const localAsUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
   return localAsUtc - date.getTime();
+}
+
+function nextOpenDayOffset(year: number, month: number, day: number, todayAllowed: boolean): number {
+  let offset = todayAllowed ? 0 : 1;
+  while (!isWeekdayDate(year, month, day + offset)) offset += 1;
+  return offset;
+}
+
+function isWeekdayDate(year: number, month: number, day: number): boolean {
+  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+  return weekday >= 1 && weekday <= 5;
 }
 
 function part(parts: Intl.DateTimeFormatPart[], type: Intl.DateTimeFormatPartTypes): string {

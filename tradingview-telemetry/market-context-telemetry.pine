@@ -13,13 +13,13 @@ groupStructure = "10 - Structure"
 groupVisual = "12 - Visual Style"
 
 exportTelemetry = input.bool(true, "Export machine telemetry", group=groupGeneral)
-asiaSession = input.session("0900-1500:1234567", "Asia", inline="asia", group=groupSessions)
+asiaSession = input.session("0900-1500:23456", "Asia", inline="asia", group=groupSessions)
 asiaTimezone = input.string("Asia/Tokyo", "", inline="asia", group=groupSessions)
-frankfurtSession = input.session("0800-0900:1234567", "Frankfurt", inline="frankfurt", group=groupSessions)
+frankfurtSession = input.session("0800-0900:23456", "Frankfurt", inline="frankfurt", group=groupSessions)
 frankfurtTimezone = input.string("Europe/Berlin", "", inline="frankfurt", group=groupSessions)
-londonSession = input.session("0800-1200:1234567", "London", inline="london", group=groupSessions)
+londonSession = input.session("0800-1200:23456", "London", inline="london", group=groupSessions)
 londonTimezone = input.string("Europe/London", "", inline="london", group=groupSessions)
-nySession = input.session("0930-1600:1234567", "New York", inline="ny", group=groupSessions)
+nySession = input.session("0930-1600:23456", "New York", inline="ny", group=groupSessions)
 nyTimezone = input.string("America/New_York", "", inline="ny", group=groupSessions)
 statsLength = input.int(10, "Completed sessions", options=[5, 10, 20], group=groupStats)
 profileLookback = input.int(120, "Fixed range bars", minval=20, maxval=300, group=groupProfile)
@@ -65,6 +65,10 @@ boolValue(value) => value ? 1.0 : 0.0
 rangePct(sessionHigh, sessionLow, sessionOpen) => not na(sessionOpen) and sessionOpen != 0 ? (sessionHigh - sessionLow) / sessionOpen * 100.0 : na
 returnPct(sessionClose, sessionOpen) => not na(sessionOpen) and sessionOpen != 0 ? (sessionClose - sessionOpen) / sessionOpen * 100.0 : na
 distancePct(level) => not na(level) and close != 0 ? (level - close) / close * 100.0 : na
+isWeekday(sessionTimezone) =>
+    localDay = dayofweek(time, sessionTimezone)
+    localDay != dayofweek.saturday and localDay != dayofweek.sunday
+sessionActive(sessionValue, sessionTimezone) => isWeekday(sessionTimezone) and not na(time(timeframe.period, sessionValue, sessionTimezone))
 
 pushSample(array<float> samples, float value, int limit) =>
     if not na(value)
@@ -157,8 +161,9 @@ var array<float> nyVolumes = array.new_float()
 
 // Inspect intrabars so session boundaries such as 09:30 remain exact on hourly charts.
 chartSeconds = timeframe.in_seconds()
+showIntradaySessionVisuals = not na(chartSeconds) and chartSeconds <= 3600
 sessionLowerTf = chartSeconds >= 1800 ? "30" : timeframe.period
-[intraTimes, intraCloseTimes, intraOpens, intraHighs, intraLows, intraCloses, intraVolumes, intraAsiaStates, intraFrankfurtStates, intraLondonStates, intraNyStates] = request.security_lower_tf(syminfo.tickerid, sessionLowerTf, [time, time_close, open, high, low, close, volume, not na(time(timeframe.period, asiaSession, asiaTimezone)), not na(time(timeframe.period, frankfurtSession, frankfurtTimezone)), not na(time(timeframe.period, londonSession, londonTimezone)), not na(time(timeframe.period, nySession, nyTimezone))], ignore_invalid_timeframe=true, calc_bars_count=10000)
+[intraTimes, intraCloseTimes, intraOpens, intraHighs, intraLows, intraCloses, intraVolumes, intraAsiaStates, intraFrankfurtStates, intraLondonStates, intraNyStates] = request.security_lower_tf(syminfo.tickerid, sessionLowerTf, [time, time_close, open, high, low, close, volume, sessionActive(asiaSession, asiaTimezone), sessionActive(frankfurtSession, frankfurtTimezone), sessionActive(londonSession, londonTimezone), sessionActive(nySession, nyTimezone)], ignore_invalid_timeframe=true, calc_bars_count=10000)
 
 var bool asiaWasActive = false
 var bool frankfurtWasActive = false
@@ -561,35 +566,35 @@ var box asiaBox = na
 var box frankfurtBox = na
 var box londonBox = na
 var box nyBox = na
-if showSessions and asiaStartedThisBar
+if showSessions and showIntradaySessionVisuals and asiaStartedThisBar
     asiaBox := box.new(asiaStartTime, asiaHigh, asiaEndTime, asiaLow, xloc=xloc.bar_time, border_color=color.new(asiaColor, 35), bgcolor=color.new(asiaColor, 93), text="Asia", text_color=color.new(asiaColor, 0), text_size=size.tiny, text_halign=text.align_left, text_valign=text.align_top)
     array.push(sessionBoxes, asiaBox)
     trimBoxes(sessionBoxes, sessionHistory * 4)
-else if showSessions and (inAsia or asiaEndedThisBar) and not na(asiaBox)
+else if showSessions and showIntradaySessionVisuals and (inAsia or asiaEndedThisBar) and not na(asiaBox)
     box.set_top(asiaBox, asiaHigh)
     box.set_bottom(asiaBox, asiaLow)
     box.set_right(asiaBox, asiaEndTime)
-if showSessions and frankfurtStartedThisBar
+if showSessions and showIntradaySessionVisuals and frankfurtStartedThisBar
     frankfurtBox := box.new(frankfurtStartTime, frankfurtHigh, frankfurtEndTime, frankfurtLow, xloc=xloc.bar_time, border_color=color.new(frankfurtColor, 35), bgcolor=color.new(frankfurtColor, 93), text="Frankfurt", text_color=color.new(frankfurtColor, 0), text_size=size.tiny, text_halign=text.align_left, text_valign=text.align_top)
     array.push(sessionBoxes, frankfurtBox)
     trimBoxes(sessionBoxes, sessionHistory * 4)
-else if showSessions and (inFrankfurt or frankfurtEndedThisBar) and not na(frankfurtBox)
+else if showSessions and showIntradaySessionVisuals and (inFrankfurt or frankfurtEndedThisBar) and not na(frankfurtBox)
     box.set_top(frankfurtBox, frankfurtHigh)
     box.set_bottom(frankfurtBox, frankfurtLow)
     box.set_right(frankfurtBox, frankfurtEndTime)
-if showSessions and londonStartedThisBar
+if showSessions and showIntradaySessionVisuals and londonStartedThisBar
     londonBox := box.new(londonStartTime, londonHigh, londonEndTime, londonLow, xloc=xloc.bar_time, border_color=color.new(londonColor, 35), bgcolor=color.new(londonColor, 93), text="London", text_color=color.new(londonColor, 0), text_size=size.tiny, text_halign=text.align_left, text_valign=text.align_top)
     array.push(sessionBoxes, londonBox)
     trimBoxes(sessionBoxes, sessionHistory * 4)
-else if showSessions and (inLondon or londonEndedThisBar) and not na(londonBox)
+else if showSessions and showIntradaySessionVisuals and (inLondon or londonEndedThisBar) and not na(londonBox)
     box.set_top(londonBox, londonHigh)
     box.set_bottom(londonBox, londonLow)
     box.set_right(londonBox, londonEndTime)
-if showSessions and nyStartedThisBar
+if showSessions and showIntradaySessionVisuals and nyStartedThisBar
     nyBox := box.new(nyStartTime, nyHigh, nyEndTime, nyLow, xloc=xloc.bar_time, border_color=color.new(nyColor, 35), bgcolor=color.new(nyColor, 93), text="New York", text_color=color.new(nyColor, 0), text_size=size.tiny, text_halign=text.align_left, text_valign=text.align_top)
     array.push(sessionBoxes, nyBox)
     trimBoxes(sessionBoxes, sessionHistory * 4)
-else if showSessions and (inNy or nyEndedThisBar) and not na(nyBox)
+else if showSessions and showIntradaySessionVisuals and (inNy or nyEndedThisBar) and not na(nyBox)
     box.set_top(nyBox, nyHigh)
     box.set_bottom(nyBox, nyLow)
     box.set_right(nyBox, nyEndTime)
@@ -718,7 +723,7 @@ if showVwaps and bar_index > 0
         array.push(monthVwapLines, line.new(bar_index - 1, monthVwap[1], bar_index, monthVwap, color=color.new(color.fuchsia, 25)))
     if newTrackedSession
         clearLines(sessionVwapLines)
-    else if showSessionVwap and inTrackedSession and inTrackedSession[1] and not na(sessionVwap) and not na(sessionVwap[1])
+    else if showSessionVwap and showIntradaySessionVisuals and inTrackedSession and inTrackedSession[1] and not na(sessionVwap) and not na(sessionVwap[1])
         array.push(sessionVwapLines, line.new(bar_index - 1, sessionVwap[1], bar_index, sessionVwap, color=color.new(chart.fg_color, 35)))
     trimLines(dayVwapLines, vwapTrailBars)
     trimLines(weekVwapLines, vwapTrailBars)

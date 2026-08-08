@@ -9,6 +9,7 @@ const MIN_PRIMARY_EVIDENCE_ROWS = 10;
 const LABEL_PATTERN = /^CTX(?:\|[A-Z0-9_-]+){2,5}$/;
 const PRIMARY_EVIDENCE_PREFIXES = [
   'CTX|PRICE|',
+  'CTX|LEVEL|',
   'CTX|SESSION|',
   'CTX|VOLATILITY|',
   'CTX|VOL|',
@@ -89,7 +90,7 @@ export function scrapeTradingViewTelemetry(symbol: string, timeframe: string): T
   if (hasCrossIndicator && crossSchema !== undefined && crossSchema !== null && !isSupportedSchema(crossSchema)) {
     warnings.push(`Cross Market schema is ${formatSchema(crossSchema)}; update the TradingView Pine script`);
   }
-  if (hasCrossIndicator && crossSchema === undefined) {
+  if (hasCrossIndicator && crossSchema === undefined && primarySchema === undefined) {
     warnings.push('Cross Market schema row is not visible in TradingView Data Window');
   }
   if (currentOnlyMetric && currentOnly !== 1) errors.push('latest-bar marker is missing; clear the TradingView crosshair and retry');
