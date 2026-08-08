@@ -1,5 +1,5 @@
 import type { ScreenshotMeta, TradingViewTelemetrySnapshot } from '../types';
-import { formatDuration, marketSessionStatuses, nextFourHourCandleClose } from '../tradingview/session-clock';
+import { MARKET_SESSIONS, formatDuration, marketSessionStatuses, nextFourHourCandleClose } from '../tradingview/session-clock';
 import { pluginSessionActiveMetrics } from '../tradingview/telemetry';
 import { isTradingViewScreenshot, validateTelemetryIntegrity } from '../tradingview/telemetry-integrity';
 
@@ -28,7 +28,7 @@ export function buildAnalysisPrompt(
     chartLines,
     includeScrapedData ? buildTradingViewTelemetryPreview(chartScreenshots, freshTelemetry) : '',
     additionalPrompt.trim(),
-    activeSessionLines(now),
+    sessionContextLines(now),
     `4H candle closes in ${formatDuration(nextFourHourCandleClose(now).getTime() - now.getTime())}`,
   ].filter(Boolean).join('\n');
 }
@@ -221,14 +221,23 @@ function chartIdentity(screenshot: ScreenshotMeta): string {
   return `${screenshot.normalizedSymbol || screenshot.symbol}::${screenshot.timeframe}`;
 }
 
-function activeSessionLines(now: Date): string {
-  const activeSessions = marketSessionStatuses(now)
-    .map((session) => session.active ? `- ${session.name} session closes in ${formatDuration(session.msUntilClose)}` : null)
-    .filter(Boolean);
+function sessionContextLines(now: Date): string {
+  const statuses = new Map(marketSessionStatuses(now).map((session) => [session.key, session]));
+  const lines = [
+    'Session schedule (weekdays only):',
+    ...MARKET_SESSIONS.map((session) => {
+      const status = statuses.get(session.key);
+      const timing = `${formatClockTime(session.startHour, session.startMinute)}-${formatClockTime(session.endHour, session.endMinute)} ${session.timeZone}`;
+      const liveState = status?.active
+        ? `active, closes in ${formatDuration(status.msUntilClose)}`
+        : `inactive, opens in ${formatDuration(status?.msUntilOpen ?? 0)}`;
+      return `- ${session.name}: ${timing}; ${liveState}`;
+    }),
+  ];
 
-  if (activeSessions.length === 0) {
-    return 'Active sessions: none';
-  }
+  return lines.join('\n');
+}
 
-  return ['Active sessions:', ...activeSessions].join('\n');
+function formatClockTime(hour: number, minute: number): string {
+  return `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
 }
