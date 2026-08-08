@@ -61,12 +61,6 @@ async function dispatchTarget(
     });
     await emitTargetStatus(target.id, 'finding_tab', 'Finding configured conversation');
 
-    if (target.provider === 'deepseek') {
-      logAgentFlow(target, 'skipped: adapter not implemented');
-      await emitTargetStatus(target.id, 'error', `${target.provider} adapter not implemented yet`);
-      return;
-    }
-
     const tab = await findOrOpenChatTab(target);
     if (!tab.id) throw new Error('Tab has no id');
     logAgentFlow(target, 'tab selected', tabInfo(tab));
