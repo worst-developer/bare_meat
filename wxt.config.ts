@@ -17,6 +17,8 @@ export default defineConfig({
       'https://www.tradingview.com/*',
       'https://tradingview.com/*',
       'https://*.tradingview.com/*',
+      'https://www.coinglass.com/*',
+      'https://coinglass.com/*',
       'https://chatgpt.com/*',
       'https://x.com/*',
       'https://grok.com/*',

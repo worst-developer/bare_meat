@@ -2,8 +2,15 @@ import { defineBackground } from 'wxt/utils/define-background';
 import { captureQueue } from '../src/capture/capture-queue';
 import { dispatchRequest } from '../src/dispatch/dispatcher';
 import type { ExtensionMessage } from '../src/messaging/protocol';
+import { coinglassUrl, isSectionAvailableForSymbol } from '../src/providers/coinglass/config';
+import { clearStoredCoinglassSnapshot, saveCoinglassSnapshot } from '../src/providers/coinglass/storage';
 import * as db from '../src/storage/db';
 import type {
+  CoinglassScrapeProgress,
+  CoinglassScrapeRequest,
+  CoinglassSection,
+  CoinglassSnapshot,
+  CoinglassSymbol,
   PendingCapture,
   ScreenshotMeta,
 } from '../src/types';
@@ -11,6 +18,8 @@ import { buildScreenshotKey, generateId } from '../src/utils/symbols';
 
 const DEFAULT_CLIPBOARD_TIMEOUT_MS = 4000;
 const CLIPBOARD_IMAGE_WAIT_MS = 6000;
+const COINGLASS_PAGE_DELAY_MS = 1400;
+const COINGLASS_LOAD_DELAY_MS = 2200;
 
 let offscreenDocumentCreated = false;
 let captureProcessorRunning = false;
@@ -63,11 +72,179 @@ async function handleRuntimeMessage(
       return { success: true };
     }
 
+    if (message.type === 'CG_SCRAPE_REQUEST') {
+      void scrapeCoinglass(message.request);
+      return { success: true };
+    }
+
     return { success: false, error: `Unsupported message type: ${message.type}` };
   } catch (error) {
     console.error('[bare meat🧸🥩] Message handler error:', error);
     return { success: false, error: String(error) };
   }
+}
+
+async function scrapeCoinglass(request: CoinglassScrapeRequest): Promise<void> {
+  await clearStoredCoinglassSnapshot();
+
+  const snapshot: CoinglassSnapshot = {
+    id: generateId(),
+    capturedAt: Date.now(),
+    symbols: request.symbols,
+    sections: request.sections,
+    status: 'scraping',
+    data: {},
+    warnings: [],
+    errors: [],
+  };
+
+  try {
+    const tab = await findOrOpenCoinglassTab();
+    if (!tab.id) throw new Error('Coinglass tab has no id');
+
+    for (const symbol of request.symbols) {
+      snapshot.data[symbol] ??= {};
+      for (const section of request.sections) {
+        if (!isSectionAvailableForSymbol(section, symbol)) {
+          snapshot.warnings.push(`${section} is not available for ${symbol}`);
+          continue;
+        }
+
+        if (section === 'longShortRatio') {
+          const ratios: Record<string, unknown> = {};
+          for (const timeframe of ['1h', '4h', '12h', '24h'] as const) {
+            try {
+              ratios[timeframe] = await scrapeCoinglassPage(tab.id, section, symbol, timeframe);
+            } catch (error) {
+              snapshot.errors.push(`${section} ${symbol} ${timeframe}: ${error instanceof Error ? error.message : String(error)}`);
+            }
+            await delay(COINGLASS_PAGE_DELAY_MS);
+          }
+          snapshot.data[symbol][section] = ratios;
+        } else {
+          try {
+            snapshot.data[symbol][section] = await scrapeCoinglassPage(tab.id, section, symbol);
+          } catch (error) {
+            snapshot.errors.push(`${section} ${symbol}: ${error instanceof Error ? error.message : String(error)}`);
+          }
+          await delay(COINGLASS_PAGE_DELAY_MS);
+        }
+      }
+    }
+
+    snapshot.status = snapshotHasData(snapshot)
+      ? snapshot.errors.length > 0 || snapshot.warnings.length > 0 ? 'partial' : 'success'
+      : 'error';
+    snapshot.capturedAt = Date.now();
+    await saveCoinglassSnapshot(snapshot);
+    await emitCoinglassComplete(snapshot);
+  } catch (error) {
+    snapshot.status = 'error';
+    snapshot.capturedAt = Date.now();
+    snapshot.errors.push(error instanceof Error ? error.message : String(error));
+    await emitCoinglassFailed(snapshot);
+  }
+}
+
+function snapshotHasData(snapshot: CoinglassSnapshot): boolean {
+  return Object.values(snapshot.data).some((sections) => (
+    sections && Object.values(sections).some((value) => value && (
+      typeof value !== 'object' || Object.keys(value as Record<string, unknown>).length > 0
+    ))
+  ));
+}
+
+async function scrapeCoinglassPage(
+  tabId: number,
+  section: CoinglassSection,
+  symbol: CoinglassSymbol,
+  timeframe?: '1h' | '4h' | '12h' | '24h'
+): Promise<unknown> {
+  await emitCoinglassProgress({
+    page: section,
+    symbol,
+    message: `Scraping ${section} ${symbol}${timeframe ? ` ${timeframe}` : ''}`,
+  });
+
+  await chrome.tabs.update(tabId, { url: coinglassUrl(section, symbol), active: true });
+  await waitForTabComplete(tabId);
+  await delay(COINGLASS_LOAD_DELAY_MS);
+  await ensureCoinglassContentScript(tabId);
+
+  const response = await chrome.tabs.sendMessage(tabId, {
+    type: 'CG_SCRAPE_PAGE',
+    section,
+    symbol,
+    timeframe,
+  } satisfies ExtensionMessage).catch((error) => ({ success: false, error: String(error) }));
+
+  if (!response?.success) {
+    throw new Error(response?.error ?? `Coinglass did not return ${section} ${symbol}`);
+  }
+
+  return response.data;
+}
+
+async function findOrOpenCoinglassTab(): Promise<chrome.tabs.Tab> {
+  const tabs = await chrome.tabs.query({});
+  const existing = tabs.find((tab) => isCoinglassUrl(tab.url));
+  if (existing) return existing;
+  return chrome.tabs.create({ url: 'https://www.coinglass.com/', active: true });
+}
+
+function isCoinglassUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === 'coinglass.com' || parsed.hostname === 'www.coinglass.com';
+  } catch {
+    return false;
+  }
+}
+
+async function waitForTabComplete(tabId: number, timeoutMs = 25000): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.status === 'complete') return;
+    await delay(300);
+  }
+}
+
+async function ensureCoinglassContentScript(tabId: number): Promise<void> {
+  const response = await chrome.tabs.sendMessage(tabId, {
+    type: 'CG_SCRAPE_PAGE',
+    section: 'fundingRate',
+    symbol: 'BTC',
+  } satisfies ExtensionMessage).catch(() => null);
+  if (response) return;
+
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ['content-scripts/coinglass.js'],
+  }).catch(() => {});
+  await delay(300);
+}
+
+async function emitCoinglassProgress(progress: CoinglassScrapeProgress): Promise<void> {
+  await chrome.runtime.sendMessage({
+    type: 'CG_SCRAPE_PROGRESS',
+    progress,
+  } satisfies ExtensionMessage).catch(() => {});
+}
+
+async function emitCoinglassComplete(snapshot: CoinglassSnapshot): Promise<void> {
+  await chrome.runtime.sendMessage({
+    type: 'CG_SCRAPE_COMPLETE',
+    snapshot,
+  } satisfies ExtensionMessage).catch(() => {});
+}
+
+async function emitCoinglassFailed(snapshot: CoinglassSnapshot): Promise<void> {
+  await chrome.runtime.sendMessage({
+    type: 'CG_SCRAPE_FAILED',
+    snapshot,
+  } satisfies ExtensionMessage).catch(() => {});
 }
 
 async function processCaptureQueue(): Promise<void> {

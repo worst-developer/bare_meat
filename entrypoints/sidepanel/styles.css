@@ -141,6 +141,36 @@ body {
 .telemetry-metric-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; min-height: 26px; padding: 5px 10px; border-top: 1px solid #30304a; align-items: center; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; }
 .telemetry-metric-row__label { min-width: 0; overflow: hidden; color: #ddd; text-overflow: ellipsis; white-space: nowrap; }
 .telemetry-metric-row__value { color: #82a5ff; text-align: right; white-space: nowrap; }
+.coinglass-preview { margin-top: 10px; border: 1px solid #3d3d59; border-radius: 4px; background: #1c2038; }
+.coinglass-preview__header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; color: #ddd; font-size: 12px; font-weight: 600; }
+.coinglass-preview__state { color: #888; font-size: 10px; }
+.coinglass-preview__state--included { color: #4caf50; }
+.coinglass-symbols { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; border-top: 1px solid #3d3d59; }
+.coinglass-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid #3d3d59; border-radius: 4px; background: #242442; color: #ddd; font-size: 11px; }
+.coinglass-settings { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; padding: 8px; border-top: 1px solid #3d3d59; }
+.coinglass-setting { display: flex; align-items: center; gap: 6px; min-width: 0; color: #ddd; font-size: 10px; }
+.coinglass-preview__actions { display: flex; align-items: flex-start; gap: 8px; padding: 8px; border-top: 1px solid #3d3d59; }
+.coinglass-preview__button { flex: 0 0 auto; padding: 6px 8px; border: 1px solid #4fc3f7; border-radius: 4px; background: #16213e; color: #fff; cursor: pointer; font-size: 11px; }
+.coinglass-preview__button:disabled { border-color: #444; color: #777; cursor: not-allowed; }
+.coinglass-preview__message { min-width: 0; color: #aaa; font-size: 10px; line-height: 1.35; }
+.coinglass-preview__message--success { color: #4caf50; }
+.coinglass-preview__message--partial { color: #ff9800; }
+.coinglass-preview__message--error { color: #f44336; }
+.coinglass-preview__empty { padding: 10px; border-top: 1px solid #3d3d59; color: #888; font-size: 11px; }
+.coinglass-result { border-top: 1px solid #3d3d59; }
+.coinglass-result__summary { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; color: #ddd; cursor: pointer; font-size: 11px; list-style: none; }
+.coinglass-result__summary::-webkit-details-marker { display: none; }
+.coinglass-result__summary::before { content: 'v'; flex: 0 0 auto; color: #82a5ff; font-size: 10px; }
+.coinglass-result:not([open]) .coinglass-result__summary::before { content: '>'; }
+.coinglass-result__status { color: #888; font-size: 10px; }
+.coinglass-result__status--success { color: #4caf50; }
+.coinglass-result__status--partial { color: #ff9800; }
+.coinglass-result__status--error { color: #f44336; }
+.coinglass-result__meta { padding: 8px 10px; border-top: 1px solid #30304a; color: #aaa; font-size: 10px; }
+.coinglass-result__warning,
+.coinglass-result__error { margin: 0 10px 8px; padding: 7px; border-left: 2px solid #ff9800; border-radius: 3px; background: #ff98001f; color: #ffcc80; font-size: 10px; line-height: 1.35; }
+.coinglass-result__error { border-left-color: #f44336; background: #f443361f; color: #ff8a80; }
+.coinglass-result__json { max-height: 300px; margin: 0; padding: 10px; overflow: auto; border-top: 1px solid #30304a; color: #c9d1d9; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .action-bar { display: flex; align-items: center; gap: 8px; }
 .action-button { padding: 10px 12px; border: 1px solid #444; border-radius: 4px; background: #333; color: #fff; cursor: pointer; font-size: 13px; }
 .action-button--submit { flex: 1; border: 0; background: #4caf50; }

@@ -1,4 +1,21 @@
 // Provider platforms for dispatch
+export type {
+  CoinglassExchangeFunding,
+  CoinglassFundingRateSymbol,
+  CoinglassGenericPage,
+  CoinglassGenericTable,
+  CoinglassLiquidationsTotals,
+  CoinglassLongShortRatio,
+  CoinglassOpenInterest,
+  CoinglassScrapeProgress,
+  CoinglassScrapeRequest,
+  CoinglassSection,
+  CoinglassSettings,
+  CoinglassSnapshot,
+  CoinglassSymbol,
+} from '../providers/coinglass/types';
+export { COINGLASS_SECTIONS, COINGLASS_SYMBOLS } from '../providers/coinglass/types';
+
 export type Provider = 'chatgpt' | 'grok' | 'deepseek' | 'kimi';
 
 // Single chat target configuration

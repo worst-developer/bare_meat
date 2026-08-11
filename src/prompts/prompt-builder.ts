@@ -1,4 +1,4 @@
-import type { ScreenshotMeta, TradingViewTelemetrySnapshot } from '../types';
+import type { CoinglassSnapshot, ScreenshotMeta, TradingViewTelemetrySnapshot } from '../types';
 import { MARKET_SESSIONS, formatDuration, marketSessionStatuses, nextFourHourCandleClose } from '../tradingview/session-clock';
 import { pluginSessionActiveMetrics } from '../tradingview/telemetry';
 import { isTradingViewScreenshot, validateTelemetryIntegrity } from '../tradingview/telemetry-integrity';
@@ -8,7 +8,9 @@ export function buildAnalysisPrompt(
   _basePrompt: string,
   additionalPrompt: string,
   includeScrapedData = false,
-  freshTelemetry?: TradingViewTelemetrySnapshot
+  freshTelemetry?: TradingViewTelemetrySnapshot,
+  includeCoinglassData = false,
+  coinglassSnapshot?: CoinglassSnapshot
 ): string {
   const now = new Date();
   const chartScreenshots = screenshots.filter(isTradingViewScreenshot);
@@ -25,12 +27,32 @@ export function buildAnalysisPrompt(
     .join('\n');
 
   return [
-    chartLines,
+    chartLines || (includeCoinglassData ? 'No TradingView screenshots are attached.' : ''),
     includeScrapedData ? buildTradingViewTelemetryPreview(chartScreenshots, freshTelemetry) : '',
+    includeCoinglassData && coinglassSnapshot ? buildCoinglassContext(coinglassSnapshot) : '',
     additionalPrompt.trim(),
     sessionContextLines(now),
     `4H candle closes in ${formatDuration(nextFourHourCandleClose(now).getTime() - now.getTime())}`,
   ].filter(Boolean).join('\n');
+}
+
+export function buildCoinglassContext(snapshot: CoinglassSnapshot): string {
+  const lines = [
+    'Coinglass market context:',
+    `Captured: ${new Date(snapshot.capturedAt).toISOString()}`,
+    `Symbols: ${snapshot.symbols.join(', ')}`,
+    `Status: ${snapshot.status}`,
+  ];
+
+  if (snapshot.warnings.length > 0) {
+    lines.push(`Warnings: ${snapshot.warnings.join('; ')}`);
+  }
+  if (snapshot.errors.length > 0) {
+    lines.push(`Errors: ${snapshot.errors.join('; ')}`);
+  }
+
+  lines.push(JSON.stringify(snapshot.data, null, 2));
+  return lines.join('\n');
 }
 
 export function buildTradingViewTelemetryPreview(

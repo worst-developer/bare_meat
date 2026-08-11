@@ -19,17 +19,21 @@ export async function dispatchRequest(
   const screenshots = allScreenshots.filter((screenshot) => message.screenshotKeys.includes(screenshot.key));
   const targets = await getChatTargets();
   const requestedTargetIds = new Set(message.targetIds);
-  const matchingTargets = resolveMatchingTargets(screenshots, targets)
-    .filter((target) => requestedTargetIds.has(target.id));
+  const matchingTargets = screenshots.length > 0
+    ? resolveMatchingTargets(screenshots, targets).filter((target) => requestedTargetIds.has(target.id))
+    : targets.filter((target) => target.enabled && requestedTargetIds.has(target.id));
 
-  if (screenshots.length === 0) return;
+  if (screenshots.length === 0 && !message.includeCoinglassData) return;
+  if (matchingTargets.length === 0) return;
 
   const prompt = buildAnalysisPrompt(
     screenshots,
     message.basePrompt,
     message.additionalPrompt,
     message.includeScrapedData,
-    message.telemetry
+    message.telemetry,
+    message.includeCoinglassData === true,
+    message.coinglassSnapshot
   );
   const incomingScreenshots = await Promise.all(screenshots.map(toIncomingScreenshot));
   console.log('[bare meat🧸🥩][dispatch] request', {
@@ -123,7 +127,7 @@ async function findOrOpenChatTab(target: ChatTarget): Promise<chrome.tabs.Tab> {
   const normalizedTargetUrl = normalizeChatUrl(target.chatUrl);
   logAgentFlow(target, 'looking for tab', { normalizedTargetUrl });
   const tabs = await chrome.tabs.query({});
-  const existing = tabs.find((tab) => tab.url && chatTabMatches(tab.url, target.chatUrl));
+  const existing = tabs.find((tab) => tab.url && chatTabMatches(tab.url, target));
 
   if (existing) {
     logAgentFlow(target, 'found existing tab', tabInfo(existing));
@@ -230,10 +234,33 @@ function safeNormalizeChatUrl(url: string): string | null {
   }
 }
 
-function chatTabMatches(tabUrl: string, targetUrl: string): boolean {
+function chatTabMatches(tabUrl: string, target: ChatTarget): boolean {
+  if (providerTabMatches(tabUrl, target.provider)) return true;
+
   const normalizedTabUrl = safeNormalizeChatUrl(tabUrl);
-  const normalizedTargetUrl = safeNormalizeChatUrl(targetUrl);
+  const normalizedTargetUrl = safeNormalizeChatUrl(target.chatUrl);
   return Boolean(normalizedTabUrl && normalizedTargetUrl && normalizedTabUrl === normalizedTargetUrl);
+}
+
+function providerTabMatches(tabUrl: string, provider: Provider): boolean {
+  const parsed = safeParseUrl(tabUrl);
+  if (!parsed) return false;
+
+  if (provider === 'grok') {
+    return parsed.hostname === 'grok.com'
+      || parsed.hostname === 'www.grok.com'
+      || (parsed.hostname === 'x.com' && parsed.pathname.startsWith('/i/grok'));
+  }
+
+  return false;
+}
+
+function safeParseUrl(url: string): URL | null {
+  try {
+    return new URL(url);
+  } catch {
+    return null;
+  }
 }
 
 async function ensureProviderContentScript(tabId: number, target: ChatTarget): Promise<void> {

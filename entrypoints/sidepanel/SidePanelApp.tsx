@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import SettingsModal from './components/SettingsModal';
 import type { ExtensionMessage } from '../../src/messaging/protocol';
-import type { ChatTarget, PromptSettings, ScreenshotMeta, TargetStatus, TradingViewTelemetrySnapshot } from '../../src/types';
+import type { ChatTarget, CoinglassSection, CoinglassSettings, CoinglassSnapshot, CoinglassSymbol, PromptSettings, ScreenshotMeta, TargetStatus, TradingViewTelemetrySnapshot } from '../../src/types';
 import * as db from '../../src/storage/db';
+import { COINGLASS_STORAGE_KEYS, DEFAULT_COINGLASS_SETTINGS, enabledCoinglassSections, mergeCoinglassSettings } from '../../src/providers/coinglass/config';
+import { loadCoinglassSnapshot } from '../../src/providers/coinglass/storage';
 import { isTradingViewScreenshot, validateTelemetryIntegrity, type TelemetryIntegrityResult } from '../../src/tradingview/telemetry-integrity';
 import { resolveMatchingTargets } from '../../src/routing/target-resolver';
 import { formatDuration, marketSessionStatuses, nextFourHourCandleClose } from '../../src/tradingview/session-clock';
@@ -24,6 +26,12 @@ export default function SidePanelApp(): JSX.Element {
   const [targetStatuses, setTargetStatuses] = useState<Record<string, TargetStatus>>({});
   const [autosubmit, setAutosubmit] = useState(false);
   const [includeScrapedData, setIncludeScrapedData] = useState(true);
+  const [includeCoinglassData, setIncludeCoinglassData] = useState(false);
+  const [coinglassSettings, setCoinglassSettings] = useState<CoinglassSettings>(DEFAULT_COINGLASS_SETTINGS);
+  const [coinglassSnapshot, setCoinglassSnapshot] = useState<CoinglassSnapshot | null>(null);
+  const [coinglassState, setCoinglassState] = useState<'idle' | 'scraping' | 'success' | 'partial' | 'error'>('idle');
+  const [coinglassMessage, setCoinglassMessage] = useState('');
+  const [manualCoinglassSymbols, setManualCoinglassSymbols] = useState<CoinglassSymbol[]>(['BTC']);
   const [telemetryScrapeState, setTelemetryScrapeState] = useState<'idle' | 'scraping' | 'success' | 'warning' | 'error'>('idle');
   const [telemetryScrapeMessage, setTelemetryScrapeMessage] = useState('');
   const [manualTelemetryPreview, setManualTelemetryPreview] = useState<TradingViewTelemetrySnapshot | null>(null);
@@ -48,6 +56,17 @@ export default function SidePanelApp(): JSX.Element {
             progress: message.progress,
           },
         }));
+      }
+
+      if (message.type === 'CG_SCRAPE_PROGRESS') {
+        setCoinglassState('scraping');
+        setCoinglassMessage(message.progress.message);
+      }
+
+      if (message.type === 'CG_SCRAPE_COMPLETE' || message.type === 'CG_SCRAPE_FAILED') {
+        setCoinglassSnapshot(message.snapshot);
+        setCoinglassState(message.snapshot.status === 'partial' ? 'partial' : message.snapshot.status === 'success' ? 'success' : 'error');
+        setCoinglassMessage(coinglassSummaryMessage(message.snapshot));
       }
     };
 
@@ -88,6 +107,7 @@ export default function SidePanelApp(): JSX.Element {
         loadAdditionalPrompt(),
         loadAutosubmit(),
         loadIncludeScrapedData(),
+        loadCoinglassState(),
         loadChatTargets(),
         loadPromptSettings(),
       ]);
@@ -116,6 +136,20 @@ export default function SidePanelApp(): JSX.Element {
     setIncludeScrapedData(result.include_scraped_data !== false);
   }
 
+  async function loadCoinglassState(): Promise<void> {
+    const result = await chrome.storage.local.get([
+      COINGLASS_STORAGE_KEYS.include,
+      COINGLASS_STORAGE_KEYS.settings,
+      COINGLASS_STORAGE_KEYS.manualSymbols,
+    ]);
+    setIncludeCoinglassData(result[COINGLASS_STORAGE_KEYS.include] === true);
+    setCoinglassSettings(mergeCoinglassSettings(result[COINGLASS_STORAGE_KEYS.settings]));
+    setManualCoinglassSymbols(normalizeCoinglassSymbols(result[COINGLASS_STORAGE_KEYS.manualSymbols]));
+    const snapshot = await loadCoinglassSnapshot();
+    setCoinglassSnapshot(snapshot);
+    setCoinglassState(snapshot?.status === 'partial' ? 'partial' : snapshot?.status === 'success' ? 'success' : snapshot?.status === 'error' ? 'error' : 'idle');
+  }
+
   async function loadChatTargets(): Promise<void> {
     const result = await chrome.storage.local.get(['chat_targets']);
     setChatTargets(Array.isArray(result.chat_targets) ? result.chat_targets : []);
@@ -133,6 +167,10 @@ export default function SidePanelApp(): JSX.Element {
   const tradingViewScreenshots = useMemo(() => screenshots.filter(isTradingViewScreenshot), [screenshots]);
   const enabledTargets = chatTargets.filter((target) => target.enabled);
   const matchingTargets = resolveMatchingTargets(screenshots, enabledTargets);
+  const dispatchTargets = screenshots.length > 0 ? matchingTargets : enabledTargets;
+  const coinglassSymbols = useMemo(() => (
+    screenshots.length > 0 ? symbolsFromScreenshots(screenshots) : manualCoinglassSymbols
+  ), [screenshots, manualCoinglassSymbols]);
 
   async function persistChatTargets(nextTargets: ChatTarget[]): Promise<void> {
     setChatTargets(nextTargets);
@@ -174,6 +212,47 @@ export default function SidePanelApp(): JSX.Element {
   async function handleIncludeScrapedDataChange(value: boolean): Promise<void> {
     setIncludeScrapedData(value);
     await chrome.storage.local.set({ include_scraped_data: value });
+  }
+
+  async function handleIncludeCoinglassDataChange(value: boolean): Promise<void> {
+    setIncludeCoinglassData(value);
+    await chrome.storage.local.set({ [COINGLASS_STORAGE_KEYS.include]: value });
+  }
+
+  async function handleCoinglassSettingChange(section: CoinglassSection, value: boolean): Promise<void> {
+    const nextSettings = { ...coinglassSettings, [section]: value };
+    setCoinglassSettings(nextSettings);
+    await chrome.storage.local.set({ [COINGLASS_STORAGE_KEYS.settings]: nextSettings });
+  }
+
+  async function handleManualCoinglassSymbolChange(symbol: CoinglassSymbol, enabled: boolean): Promise<void> {
+    const nextSymbols = enabled
+      ? [...new Set([...manualCoinglassSymbols, symbol])]
+      : manualCoinglassSymbols.filter((candidate) => candidate !== symbol);
+    const normalized = nextSymbols.length > 0 ? nextSymbols : ['BTC'] satisfies CoinglassSymbol[];
+    setManualCoinglassSymbols(normalized);
+    await chrome.storage.local.set({ [COINGLASS_STORAGE_KEYS.manualSymbols]: normalized });
+  }
+
+  async function handleScrapeCoinglass(): Promise<void> {
+    const sections = enabledCoinglassSections(coinglassSettings);
+    if (coinglassSymbols.length === 0 || sections.length === 0) {
+      setCoinglassState('error');
+      setCoinglassMessage('Select at least one symbol and one Coinglass section.');
+      return;
+    }
+
+    setCoinglassSnapshot(null);
+    setCoinglassState('scraping');
+    setCoinglassMessage('Clearing old Coinglass data and opening Coinglass...');
+    await chrome.storage.local.remove(COINGLASS_STORAGE_KEYS.snapshot);
+    await chrome.runtime.sendMessage({
+      type: 'CG_SCRAPE_REQUEST',
+      request: {
+        symbols: coinglassSymbols,
+        sections,
+      },
+    } satisfies ExtensionMessage);
   }
 
   async function scrapeActiveTradingViewTelemetry(): Promise<TradingViewTelemetrySnapshot> {
@@ -251,12 +330,18 @@ export default function SidePanelApp(): JSX.Element {
   }
 
   async function handlePrepareChats(): Promise<void> {
-    if (screenshots.length === 0 || matchingTargets.length === 0) return;
+    const canDispatchCoinglassOnly = screenshots.length === 0 && includeCoinglassData && coinglassSnapshot;
+    if ((!canDispatchCoinglassOnly && screenshots.length === 0) || dispatchTargets.length === 0) return;
+    if (includeCoinglassData && !coinglassSnapshot) {
+      setCoinglassState('error');
+      setCoinglassMessage('Scrape Coinglass before including it in the prompt.');
+      return;
+    }
 
     setIsSubmitting(true);
     try {
       let dispatchTelemetry: TradingViewTelemetrySnapshot | undefined;
-      if (includeScrapedData) {
+      if (includeScrapedData && screenshots.length > 0) {
         setTelemetryScrapeState('scraping');
         setTelemetryScrapeMessage('Refreshing CTX data before submit...');
         const telemetry = await scrapeActiveTradingViewTelemetry().catch((error) => {
@@ -279,11 +364,13 @@ export default function SidePanelApp(): JSX.Element {
         type: 'DISPATCH_REQUEST',
         screenshotKeys: screenshots.map((screenshot) => screenshot.key),
         additionalPrompt,
-        targetIds: matchingTargets.map((target) => target.id),
+        targetIds: dispatchTargets.map((target) => target.id),
         basePrompt: promptSettings.basePrompt,
         autosubmit,
         includeScrapedData,
         telemetry: dispatchTelemetry,
+        includeCoinglassData,
+        coinglassSnapshot: coinglassSnapshot ?? undefined,
       } satisfies ExtensionMessage);
     } catch (error) {
       setTelemetryScrapeState('error');
@@ -471,6 +558,69 @@ export default function SidePanelApp(): JSX.Element {
             manualPreview={manualTelemetryPreview}
           />
         </div>
+        <label className="option-row option-row--stacked">
+          <input
+            className="option-row__checkbox"
+            type="checkbox"
+            checked={includeCoinglassData}
+            onChange={(event) => void handleIncludeCoinglassDataChange(event.target.checked)}
+          />
+          <span>
+            Add scraped Coinglass JSON data to prompt
+          </span>
+        </label>
+        <div className="coinglass-preview">
+          <div className="coinglass-preview__header">
+            <span>Coinglass data</span>
+            <span className={includeCoinglassData ? 'coinglass-preview__state coinglass-preview__state--included' : 'coinglass-preview__state'}>
+              {includeCoinglassData ? 'Included' : 'Not included'}
+            </span>
+          </div>
+          {screenshots.length === 0 && (
+            <div className="coinglass-symbols">
+              {(['BTC', 'ETH', 'SOL'] as CoinglassSymbol[]).map((symbol) => (
+                <label key={symbol} className="coinglass-chip">
+                  <input
+                    className="control-checkbox"
+                    type="checkbox"
+                    checked={manualCoinglassSymbols.includes(symbol)}
+                    onChange={(event) => void handleManualCoinglassSymbolChange(symbol, event.target.checked)}
+                  />
+                  {symbol}
+                </label>
+              ))}
+            </div>
+          )}
+          <div className="coinglass-settings">
+            {Object.entries(coinglassSettings).map(([section, enabled]) => (
+              <label key={section} className="coinglass-setting">
+                <input
+                  className="control-checkbox"
+                  type="checkbox"
+                  checked={enabled}
+                  onChange={(event) => void handleCoinglassSettingChange(section as CoinglassSection, event.target.checked)}
+                />
+                {formatCoinglassSection(section as CoinglassSection)}
+              </label>
+            ))}
+          </div>
+          <div className="coinglass-preview__actions">
+            <button
+              className="coinglass-preview__button"
+              type="button"
+              disabled={coinglassState === 'scraping' || isSubmitting}
+              onClick={() => void handleScrapeCoinglass()}
+            >
+              {coinglassState === 'scraping' ? 'Scraping...' : 'Scrape Coinglass'}
+            </button>
+            {coinglassMessage && (
+              <span className={`coinglass-preview__message coinglass-preview__message--${coinglassState}`}>
+                {coinglassMessage}
+              </span>
+            )}
+          </div>
+          <CoinglassSnapshotPreview snapshot={coinglassSnapshot} />
+        </div>
         <label className="field-label field-label--prompt">Additional prompt</label>
         <textarea
           className="prompt-input"
@@ -483,7 +633,7 @@ export default function SidePanelApp(): JSX.Element {
       <div className="action-bar">
         <button
           className="action-button action-button--submit"
-          disabled={screenshots.length === 0 || matchingTargets.length === 0 || isSubmitting}
+          disabled={dispatchTargets.length === 0 || isSubmitting || (screenshots.length === 0 && (!includeCoinglassData || !coinglassSnapshot))}
           onClick={() => void handlePrepareChats()}
         >
           {isSubmitting ? 'Preparing...' : 'Submit'}
@@ -514,6 +664,41 @@ export default function SidePanelApp(): JSX.Element {
 
       <SessionStatusBlock now={now} />
     </div>
+  );
+}
+
+function CoinglassSnapshotPreview({ snapshot }: { snapshot: CoinglassSnapshot | null }): JSX.Element {
+  if (!snapshot) {
+    return (
+      <div className="coinglass-preview__empty">
+        No Coinglass data scraped for this request.
+      </div>
+    );
+  }
+
+  return (
+    <details className="coinglass-result" open>
+      <summary className="coinglass-result__summary">
+        <span>{snapshot.symbols.join(', ')} · {snapshot.sections.length} section(s)</span>
+        <span className={`coinglass-result__status coinglass-result__status--${snapshot.status}`}>
+          {snapshot.status}
+        </span>
+      </summary>
+      <div className="coinglass-result__meta">
+        Captured {new Date(snapshot.capturedAt).toLocaleTimeString()}
+      </div>
+      {snapshot.warnings.length > 0 && (
+        <div className="coinglass-result__warning">
+          {snapshot.warnings.join('; ')}
+        </div>
+      )}
+      {snapshot.errors.length > 0 && (
+        <div className="coinglass-result__error">
+          {snapshot.errors.join('; ')}
+        </div>
+      )}
+      <pre className="coinglass-result__json">{JSON.stringify(snapshot.data, null, 2)}</pre>
+    </details>
   );
 }
 
@@ -756,6 +941,51 @@ function quoteCurrencyFromSymbol(symbol: string): string {
   if (/USDT/i.test(symbol)) return 'USDT';
   if (/USD/i.test(symbol)) return 'USD';
   return 'unknown';
+}
+
+function symbolsFromScreenshots(screenshots: ScreenshotMeta[]): CoinglassSymbol[] {
+  const symbols = screenshots
+    .map((screenshot) => coinglassSymbolFromText(screenshot.normalizedSymbol || screenshot.symbol))
+    .filter((symbol): symbol is CoinglassSymbol => Boolean(symbol));
+  return [...new Set(symbols)];
+}
+
+function normalizeCoinglassSymbols(value: unknown): CoinglassSymbol[] {
+  if (!Array.isArray(value)) return ['BTC'];
+  const symbols = value
+    .map((item) => typeof item === 'string' ? coinglassSymbolFromText(item) : null)
+    .filter((symbol): symbol is CoinglassSymbol => Boolean(symbol));
+  return symbols.length > 0 ? [...new Set(symbols)] : ['BTC'];
+}
+
+function coinglassSymbolFromText(value: string): CoinglassSymbol | null {
+  const normalized = normalizeSymbol(value);
+  if (normalized.includes('BTC')) return 'BTC';
+  if (normalized.includes('ETH')) return 'ETH';
+  if (normalized.includes('SOL')) return 'SOL';
+  return null;
+}
+
+function formatCoinglassSection(section: CoinglassSection): string {
+  const names: Record<CoinglassSection, string> = {
+    openInterest: 'Open interest',
+    fundingRateSymbol: 'Funding by symbol',
+    liquidationsTotals: 'Liquidations',
+    fundingRate: 'Funding overview',
+    longShortRatio: 'Long/short ratio',
+    etf: 'ETF',
+    basis: 'Basis',
+    spotInflowOutflow: 'Spot inflow/outflow',
+  };
+  return names[section];
+}
+
+function coinglassSummaryMessage(snapshot: CoinglassSnapshot): string {
+  const symbolCount = snapshot.symbols.length;
+  const sectionCount = snapshot.sections.length;
+  if (snapshot.status === 'success') return `Scraped ${symbolCount} symbol(s), ${sectionCount} section(s).`;
+  if (snapshot.status === 'partial') return `Scraped with ${snapshot.warnings.length} warning(s).`;
+  return snapshot.errors.join('; ') || 'Coinglass scrape failed.';
 }
 
 function labelsFromFilename(filename: string): { symbol: string; timeframe: string } {

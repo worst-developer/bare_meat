@@ -1,4 +1,9 @@
 import type {
+  CoinglassScrapeProgress,
+  CoinglassScrapeRequest,
+  CoinglassSection,
+  CoinglassSymbol,
+  CoinglassSnapshot,
   IncomingScreenshot,
   PendingCapture,
   Provider,
@@ -11,8 +16,13 @@ export type ExtensionMessage =
   | { type: 'TV_CAPTURE_TRIGGERED'; capture: PendingCapture }
   | { type: 'TV_READ_CLIPBOARD_IMAGE' }
   | { type: 'TV_SCRAPE_TELEMETRY' }
+  | { type: 'CG_SCRAPE_REQUEST'; request: CoinglassScrapeRequest }
+  | { type: 'CG_SCRAPE_PROGRESS'; progress: CoinglassScrapeProgress }
+  | { type: 'CG_SCRAPE_COMPLETE'; snapshot: CoinglassSnapshot }
+  | { type: 'CG_SCRAPE_FAILED'; snapshot: CoinglassSnapshot }
+  | { type: 'CG_SCRAPE_PAGE'; section: CoinglassSection; symbol: CoinglassSymbol; timeframe?: '1h' | '4h' | '12h' | '24h' }
   | { type: 'SCREENSHOT_UPDATE'; screenshot: ScreenshotMeta }
-  | { type: 'DISPATCH_REQUEST'; screenshotKeys: string[]; additionalPrompt: string; targetIds: string[]; basePrompt: string; autosubmit: boolean; includeScrapedData: boolean; telemetry?: ScreenshotMeta['tradingViewTelemetry'] }
+  | { type: 'DISPATCH_REQUEST'; screenshotKeys: string[]; additionalPrompt: string; targetIds: string[]; basePrompt: string; autosubmit: boolean; includeScrapedData: boolean; telemetry?: ScreenshotMeta['tradingViewTelemetry']; includeCoinglassData?: boolean; coinglassSnapshot?: CoinglassSnapshot }
   | { type: 'DISPATCH_STATUS_UPDATE'; targetId: string; state: TargetDispatchState; message?: string; progress?: number }
   | { type: 'PROVIDER_PING' }
   | { type: 'PROVIDER_READY'; provider: Provider }
