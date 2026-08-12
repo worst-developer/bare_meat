@@ -10,6 +10,7 @@ import type {
 
 const EXCHANGES = ['binance', 'bybit', 'okx', 'cme'] as const;
 const LIQUIDATION_PERIODS = ['1h', '4h', '12h', '24h'] as const;
+const TRACKED_SPOT_NETFLOW_SYMBOLS: CoinglassSymbol[] = ['BTC', 'ETH', 'SOL'];
 
 export function parseCoinglassPage(
   document: Document,
@@ -27,6 +28,7 @@ export function parseCoinglassPage(
   if (section === 'longShortRatio') return parseLongShortRatio(document);
   if (section === 'basis') return parseBasis(document, symbol);
   if (section === 'etf') return parseEtf(document, symbol);
+  if (section === 'spotInflowOutflow') return parseSpotInflowOutflow(document, symbol);
   return parseGenericPage(document, symbol);
 }
 
@@ -163,6 +165,22 @@ export function parseEtf(document: Document, symbol: CoinglassSymbol): unknown {
   };
 }
 
+export function parseSpotInflowOutflow(document: Document, symbol: CoinglassSymbol): unknown {
+  assertSpotInflowOutflowPage(document);
+
+  const tables = filterTablesBySymbols(extractTables(document).slice(0, 5), TRACKED_SPOT_NETFLOW_SYMBOLS);
+  if (tables.length === 0) {
+    throw new Error('Coinglass spot inflow/outflow BTC/ETH/SOL table data was not found');
+  }
+
+  return {
+    title: text(document.querySelector('h1, h2')) || 'Spot inflow/outflow',
+    symbol,
+    symbolRows: tables.flatMap((table) => table.rows.filter((row) => rowMatchesSymbol(row, symbol))),
+    tables,
+  };
+}
+
 export function isChallengePage(document: Document): boolean {
   const content = `${document.title} ${text(document.body)}`.toLowerCase();
   return content.includes('checking your browser')
@@ -170,6 +188,30 @@ export function isChallengePage(document: Document): boolean {
     || content.includes('cloudflare')
     || content.includes('verify you are human')
     || content.includes('just a moment');
+}
+
+function assertSpotInflowOutflowPage(document: Document): void {
+  const heading = text(document.querySelector('h1, h2')).toLowerCase();
+  const title = document.title.toLowerCase();
+  const content = `${document.title} ${text(document.body)}`.toLowerCase();
+
+  if (title.includes('donations') || heading.includes('donations')) {
+    throw new Error('Coinglass spot inflow/outflow URL redirected to Donations page');
+  }
+
+  if (heading.includes('basis') && !hasSpotFlowTerms(content)) {
+    throw new Error('Coinglass spot inflow/outflow URL returned Basis page');
+  }
+
+  if (!hasSpotFlowTerms(content)) {
+    throw new Error('Coinglass spot inflow/outflow page was not found at this URL');
+  }
+}
+
+function hasSpotFlowTerms(content: string): boolean {
+  const hasFlow = /\b(inflow|outflow|netflow|net flow)\b/i.test(content);
+  const hasScope = /\b(spot|exchange)\b/i.test(content);
+  return hasFlow && hasScope;
 }
 
 export function extractTables(document: Document): Array<{ title: string; headers: string[]; rows: Array<Record<string, string>> }> {
@@ -407,6 +449,25 @@ function sumValues(values: Array<string | number | null | undefined>): number | 
     .map((value) => typeof value === 'number' ? value : typeof value === 'string' ? parseNumber(value) : null)
     .filter((value): value is number => value !== null);
   return numbers.length > 0 ? numbers.reduce((sum, value) => sum + value, 0) : null;
+}
+
+function rowMatchesSymbol(row: Record<string, string>, symbol: CoinglassSymbol): boolean {
+  return Object.values(row).some((value) => {
+    const normalized = value.toUpperCase();
+    return normalized === symbol || normalized.includes(`${symbol}/`) || normalized.includes(`${symbol} `);
+  });
+}
+
+function filterTablesBySymbols<T extends { rows: Array<Record<string, string>> }>(
+  tables: T[],
+  symbols: CoinglassSymbol[]
+): T[] {
+  return tables
+    .map((table) => ({
+      ...table,
+      rows: table.rows.filter((row) => symbols.some((symbol) => rowMatchesSymbol(row, symbol))),
+    }))
+    .filter((table) => table.rows.length > 0);
 }
 
 function moneyFromCard(cards: Record<string, string>, label: string): number | null {

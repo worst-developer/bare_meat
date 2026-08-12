@@ -40,7 +40,7 @@ export function coinglassUrl(section: CoinglassSection, symbol: CoinglassSymbol)
   if (section === 'longShortRatio') return `https://www.coinglass.com/LongShortRatio/${upper}`;
   if (section === 'etf') return `https://www.coinglass.com/etf/${coinglassEtfSlug(symbol)}`;
   if (section === 'basis') return 'https://www.coinglass.com/Basis';
-  if (section === 'spotInflowOutflow') return 'https://www.coinglass.com/InflowAndOutflow';
+  if (section === 'spotInflowOutflow') return 'https://www.coinglass.com/spot-inflow-outflow';
   return 'https://www.coinglass.com/';
 }
 

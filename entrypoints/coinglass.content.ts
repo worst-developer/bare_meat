@@ -27,7 +27,7 @@ async function scrapePage(message: Extract<ExtensionMessage, { type: 'CG_SCRAPE_
       await delay(900);
     }
 
-    if ((message.section === 'basis' || message.section === 'spotInflowOutflow') && message.symbol) {
+    if (message.section === 'basis' && message.symbol) {
       await clickByText(message.symbol);
       await delay(900);
     }

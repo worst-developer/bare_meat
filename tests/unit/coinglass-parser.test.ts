@@ -22,6 +22,10 @@ describe('Coinglass parser', () => {
     expect(coinglassUrl('etf', 'SOL')).toBe('https://www.coinglass.com/etf/solana');
   });
 
+  it('builds the fixture-backed spot inflow outflow URL', () => {
+    expect(coinglassUrl('spotInflowOutflow', 'BTC')).toBe('https://www.coinglass.com/spot-inflow-outflow');
+  });
+
   it('parses compact money and percent values', () => {
     expect(parseNumber('$2.77B')).toBe(2_770_000_000);
     expect(parseNumber('+0.45%')).toBe(0.45);
