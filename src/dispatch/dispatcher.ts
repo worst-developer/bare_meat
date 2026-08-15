@@ -1,6 +1,8 @@
 import * as db from '../storage/db';
 import type {
   ChatTarget,
+  CoinglassSnapshot,
+  CoinglassScreenshotImage,
   IncomingScreenshot,
   Provider,
   ScreenshotMeta,
@@ -23,7 +25,8 @@ export async function dispatchRequest(
     ? resolveMatchingTargets(screenshots, targets).filter((target) => requestedTargetIds.has(target.id))
     : targets.filter((target) => target.enabled && requestedTargetIds.has(target.id));
 
-  if (screenshots.length === 0 && !message.includeCoinglassData) return;
+  const coinglassScreenshots = message.coinglassSnapshot?.screenshots ?? [];
+  if (screenshots.length === 0 && !message.includeCoinglassData && coinglassScreenshots.length === 0) return;
   if (matchingTargets.length === 0) return;
 
   const prompt = buildAnalysisPrompt(
@@ -35,7 +38,11 @@ export async function dispatchRequest(
     message.includeCoinglassData === true,
     message.coinglassSnapshot
   );
-  const incomingScreenshots = await Promise.all(screenshots.map(toIncomingScreenshot));
+  const incomingScreenshots = [
+    ...await Promise.all(screenshots.map(toIncomingScreenshot)),
+    ...coinglassScreenshots.map(toIncomingCoinglassScreenshot),
+    ...(message.includeCoinglassData && message.coinglassSnapshot ? [toIncomingCoinglassJsonFile(message.coinglassSnapshot)] : []),
+  ];
   console.log('[bare meat🧸🥩][dispatch] request', {
     screenshotKeys: screenshots.map((screenshot) => screenshot.key),
     targetIds: matchingTargets.map((target) => target.id),
@@ -56,8 +63,8 @@ async function dispatchTarget(
 ): Promise<void> {
   try {
     logAgentFlow(target, 'start', {
-      screenshotCount: screenshots.length,
-      screenshots: screenshots.map((screenshot) => screenshot.filename),
+      fileCount: screenshots.length,
+      files: screenshots.map((screenshot) => screenshot.filename),
       promptPreview: preview(prompt),
       autosubmit,
       chatUrl: target.chatUrl,
@@ -84,16 +91,16 @@ async function dispatchTarget(
     }
     logAgentFlow(target, 'provider ready', { tabId: tab.id });
 
-    await emitTargetStatus(target.id, 'transferring_images', `Sending ${screenshots.length} image(s)`);
-    await emitTargetStatus(target.id, 'attaching_images', `Attaching ${screenshots.length} image(s)`);
+    await emitTargetStatus(target.id, 'transferring_images', `Sending ${screenshots.length} file(s)`);
+    await emitTargetStatus(target.id, 'attaching_images', `Attaching ${screenshots.length} file(s)`);
     await emitTargetStatus(target.id, 'writing_prompt', 'Writing prompt');
     if (autosubmit) {
       await emitTargetStatus(target.id, 'working', 'Working…');
     }
     logAgentFlow(target, 'sending prepare', {
       tabId: tab.id,
-      screenshotCount: screenshots.length,
-      screenshots: screenshots.map((screenshot) => screenshot.filename),
+      fileCount: screenshots.length,
+      files: screenshots.map((screenshot) => screenshot.filename),
       autosubmit,
     });
     const response = await chrome.tabs.sendMessage(tab.id, {
@@ -193,6 +200,59 @@ async function toIncomingScreenshot(meta: ScreenshotMeta): Promise<IncomingScree
     filename: sanitizeFilename(`${meta.symbol}_${meta.timeframe}_${meta.id}.png`),
     mimeType: meta.mimeType,
     dataUrl: await blobToDataUrl(blob),
+  };
+}
+
+function toIncomingCoinglassScreenshot(image: CoinglassScreenshotImage): IncomingScreenshot {
+  const meta: ScreenshotMeta = {
+    id: image.id,
+    key: `coinglass::${image.kind}::${image.symbol}::${image.timeframe}::${image.id}`,
+    symbol: image.symbol,
+    normalizedSymbol: image.symbol,
+    timeframe: image.timeframe,
+    blobId: image.id,
+    hash: image.id,
+    mimeType: image.mimeType,
+    capturedAt: Date.now(),
+    rawTradingView: {},
+  };
+  return {
+    meta,
+    filename: sanitizeFilename(image.filename),
+    mimeType: image.mimeType,
+    dataUrl: image.dataUrl,
+  };
+}
+
+function toIncomingCoinglassJsonFile(snapshot: CoinglassSnapshot): IncomingScreenshot {
+  const id = `coinglass-${snapshot.id}`;
+  const filename = sanitizeFilename(`coinglass_context_${snapshot.symbols.join('_')}_${snapshot.id}.json`);
+  const json = JSON.stringify(serializeCoinglassSnapshotForFile(snapshot), null, 2);
+  return {
+    meta: {
+      id,
+      key: `coinglass::json::${snapshot.id}`,
+      symbol: 'COINGLASS',
+      normalizedSymbol: 'COINGLASS',
+      timeframe: 'context',
+      blobId: id,
+      hash: snapshot.id,
+      mimeType: 'application/json',
+      capturedAt: snapshot.capturedAt,
+      rawTradingView: {},
+    },
+    filename,
+    mimeType: 'application/json',
+    dataUrl: `data:application/json;charset=utf-8,${encodeURIComponent(json)}`,
+  };
+}
+
+function serializeCoinglassSnapshotForFile(snapshot: CoinglassSnapshot): Omit<CoinglassSnapshot, 'screenshots'> & {
+  screenshots?: Array<Omit<CoinglassScreenshotImage, 'dataUrl'>>;
+} {
+  return {
+    ...snapshot,
+    screenshots: snapshot.screenshots?.map(({ dataUrl: _dataUrl, ...screenshot }) => screenshot),
   };
 }
 

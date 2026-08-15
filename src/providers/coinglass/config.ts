@@ -1,4 +1,4 @@
-import type { CoinglassSection, CoinglassSettings, CoinglassSymbol } from './types';
+import type { CoinglassScreenshotSettings, CoinglassSection, CoinglassSettings, CoinglassSymbol } from './types';
 
 export const DEFAULT_COINGLASS_SETTINGS: CoinglassSettings = {
   openInterest: true,
@@ -11,9 +11,20 @@ export const DEFAULT_COINGLASS_SETTINGS: CoinglassSettings = {
   spotInflowOutflow: true,
 };
 
+export const DEFAULT_COINGLASS_SCREENSHOT_SETTINGS: CoinglassScreenshotSettings = {
+  liquidationHeatmap: true,
+  liquidationMap: true,
+  heatmapTimeframes: {
+    '12h': false,
+    '24h': true,
+    '7d': true,
+  },
+};
+
 export const COINGLASS_STORAGE_KEYS = {
   include: 'include_coinglass_data',
   settings: 'coinglass_settings',
+  screenshotSettings: 'coinglass_screenshot_settings',
   snapshot: 'coinglass_snapshot',
   manualSymbols: 'coinglass_manual_symbols',
 } as const;
@@ -31,6 +42,19 @@ export function mergeCoinglassSettings(value: unknown): CoinglassSettings {
   };
 }
 
+export function mergeCoinglassScreenshotSettings(value: unknown): CoinglassScreenshotSettings {
+  const incoming = isObject(value) ? value : {};
+  const incomingTimeframes = isObject(incoming.heatmapTimeframes) ? incoming.heatmapTimeframes : {};
+  return {
+    ...DEFAULT_COINGLASS_SCREENSHOT_SETTINGS,
+    ...incoming,
+    heatmapTimeframes: {
+      ...DEFAULT_COINGLASS_SCREENSHOT_SETTINGS.heatmapTimeframes,
+      ...incomingTimeframes,
+    },
+  };
+}
+
 export function coinglassUrl(section: CoinglassSection, symbol: CoinglassSymbol): string {
   const upper = symbol.toUpperCase();
   if (section === 'openInterest') return `https://www.coinglass.com/open-interest/${upper}`;
@@ -42,6 +66,14 @@ export function coinglassUrl(section: CoinglassSection, symbol: CoinglassSymbol)
   if (section === 'basis') return 'https://www.coinglass.com/Basis';
   if (section === 'spotInflowOutflow') return 'https://www.coinglass.com/spot-inflow-outflow';
   return 'https://www.coinglass.com/';
+}
+
+export function coinglassLiquidationHeatmapUrl(symbol: CoinglassSymbol): string {
+  return `https://www.coinglass.com/pro/futures/LiquidationHeatMap?coin=${symbol.toUpperCase()}&type=pair`;
+}
+
+export function coinglassLiquidationMapUrl(): string {
+  return 'https://www.coinglass.com/pro/futures/LiquidationMap';
 }
 
 export function isSectionAvailableForSymbol(section: CoinglassSection, symbol: CoinglassSymbol): boolean {

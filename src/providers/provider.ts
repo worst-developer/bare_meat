@@ -40,9 +40,21 @@ export function waitForElement(
 }
 
 export async function incomingScreenshotToFile(screenshot: IncomingScreenshot): Promise<File> {
-  const response = await fetch(screenshot.dataUrl);
-  const blob = await response.blob();
+  const blob = dataUrlToBlob(screenshot.dataUrl, screenshot.mimeType);
   return new File([blob], screenshot.filename, { type: screenshot.mimeType });
+}
+
+function dataUrlToBlob(dataUrl: string, fallbackMimeType: string): Blob {
+  const [header = '', body = ''] = dataUrl.split(',');
+  const mimeType = header.match(/^data:([^;,]+)/)?.[1] ?? fallbackMimeType;
+  if (header.includes(';base64')) {
+    const binary = atob(body);
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+    return new Blob([bytes], { type: mimeType });
+  }
+
+  return new Blob([decodeURIComponent(body)], { type: mimeType });
 }
 
 export function setElementText(element: HTMLElement, text: string): void {

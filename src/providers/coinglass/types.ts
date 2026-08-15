@@ -17,9 +17,29 @@ export type CoinglassSection = typeof COINGLASS_SECTIONS[number];
 
 export type CoinglassSettings = Record<CoinglassSection, boolean>;
 
+export type CoinglassHeatmapTimeframe = '12h' | '24h' | '7d';
+
+export interface CoinglassScreenshotSettings {
+  liquidationHeatmap: boolean;
+  liquidationMap: boolean;
+  heatmapTimeframes: Record<CoinglassHeatmapTimeframe, boolean>;
+}
+
+export interface CoinglassScreenshotImage {
+  id: string;
+  filename: string;
+  mimeType: string;
+  dataUrl: string;
+  symbol: CoinglassSymbol;
+  timeframe: CoinglassHeatmapTimeframe;
+  kind: 'liquidationHeatmap' | 'liquidationMapChart1' | 'liquidationMapChart2';
+  title: string;
+}
+
 export interface CoinglassScrapeRequest {
   symbols: CoinglassSymbol[];
   sections: CoinglassSection[];
+  screenshots?: CoinglassScreenshotSettings;
   force?: boolean;
 }
 
@@ -36,6 +56,7 @@ export interface CoinglassSnapshot {
   sections: CoinglassSection[];
   status: 'idle' | 'scraping' | 'success' | 'partial' | 'error';
   data: Partial<Record<CoinglassSymbol, Partial<Record<CoinglassSection, unknown>>>>;
+  screenshots?: CoinglassScreenshotImage[];
   warnings: string[];
   errors: string[];
 }

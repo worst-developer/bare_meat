@@ -28,19 +28,38 @@ export function buildAnalysisPrompt(
 
   return [
     chartLines || (includeCoinglassData ? 'No TradingView screenshots are attached.' : ''),
+    coinglassSnapshot ? buildCoinglassScreenshotContext(coinglassSnapshot) : '',
     includeScrapedData ? buildTradingViewTelemetryPreview(chartScreenshots, freshTelemetry) : '',
-    includeCoinglassData && coinglassSnapshot ? buildCoinglassContext(coinglassSnapshot) : '',
+    includeCoinglassData && coinglassSnapshot ? buildCoinglassAttachmentContext(coinglassSnapshot) : '',
     additionalPrompt.trim(),
     sessionContextLines(now),
     `4H candle closes in ${formatDuration(nextFourHourCandleClose(now).getTime() - now.getTime())}`,
   ].filter(Boolean).join('\n');
 }
 
-export function buildCoinglassContext(snapshot: CoinglassSnapshot): string {
+function buildCoinglassScreenshotContext(snapshot: CoinglassSnapshot): string {
+  const screenshots = snapshot.screenshots ?? [];
+  if (screenshots.length === 0) return '';
+  return [
+    'Attached Coinglass heatmap screenshots:',
+    ...screenshots.map((screenshot) => (
+      `- ${screenshot.symbol} ${screenshot.timeframe}: ${formatCoinglassScreenshotKind(screenshot.kind)} (${screenshot.filename})`
+    )),
+  ].join('\n');
+}
+
+function formatCoinglassScreenshotKind(kind: NonNullable<CoinglassSnapshot['screenshots']>[number]['kind']): string {
+  if (kind === 'liquidationHeatmap') return 'liquidation heatmap';
+  if (kind === 'liquidationMapChart1') return 'liquidation map chart 1';
+  return 'liquidation map chart 2';
+}
+
+export function buildCoinglassAttachmentContext(snapshot: CoinglassSnapshot): string {
   const lines = [
-    'Coinglass market context:',
+    'Coinglass market context is attached as a JSON file.',
     `Captured: ${new Date(snapshot.capturedAt).toISOString()}`,
     `Symbols: ${snapshot.symbols.join(', ')}`,
+    `Sections: ${snapshot.sections.join(', ') || 'none'}`,
     `Status: ${snapshot.status}`,
   ];
 
@@ -51,9 +70,10 @@ export function buildCoinglassContext(snapshot: CoinglassSnapshot): string {
     lines.push(`Errors: ${snapshot.errors.join('; ')}`);
   }
 
-  lines.push(JSON.stringify(snapshot.data, null, 2));
   return lines.join('\n');
 }
+
+export const buildCoinglassContext = buildCoinglassAttachmentContext;
 
 export function buildTradingViewTelemetryPreview(
   screenshots: ScreenshotMeta[],

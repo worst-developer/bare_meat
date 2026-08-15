@@ -1,6 +1,7 @@
 // Provider platforms for dispatch
 export type {
   CoinglassExchangeFunding,
+  CoinglassHeatmapTimeframe,
   CoinglassFundingRateSymbol,
   CoinglassGenericPage,
   CoinglassGenericTable,
@@ -11,6 +12,8 @@ export type {
   CoinglassScrapeRequest,
   CoinglassSection,
   CoinglassSettings,
+  CoinglassScreenshotImage,
+  CoinglassScreenshotSettings,
   CoinglassSnapshot,
   CoinglassSymbol,
 } from '../providers/coinglass/types';

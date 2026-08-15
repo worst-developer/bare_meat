@@ -12,8 +12,9 @@ export default defineConfig({
     action: {
       default_title: '__MSG_extName__',
     },
-    permissions: ['sidePanel', 'storage', 'offscreen', 'clipboardRead', 'tabs', 'scripting'],
+    permissions: ['sidePanel', 'storage', 'offscreen', 'clipboardRead', 'tabs', 'scripting', 'activeTab'],
     host_permissions: [
+      '<all_urls>',
       'https://www.tradingview.com/*',
       'https://tradingview.com/*',
       'https://*.tradingview.com/*',

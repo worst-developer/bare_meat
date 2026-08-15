@@ -2,13 +2,15 @@ import { defineBackground } from 'wxt/utils/define-background';
 import { captureQueue } from '../src/capture/capture-queue';
 import { dispatchRequest } from '../src/dispatch/dispatcher';
 import type { ExtensionMessage } from '../src/messaging/protocol';
-import { coinglassUrl, isSectionAvailableForSymbol } from '../src/providers/coinglass/config';
+import { coinglassLiquidationHeatmapUrl, coinglassLiquidationMapUrl, coinglassUrl, isSectionAvailableForSymbol } from '../src/providers/coinglass/config';
 import { clearStoredCoinglassSnapshot, saveCoinglassSnapshot } from '../src/providers/coinglass/storage';
 import * as db from '../src/storage/db';
 import type {
+  CoinglassHeatmapTimeframe,
   CoinglassScrapeProgress,
   CoinglassScrapeRequest,
   CoinglassSection,
+  CoinglassScreenshotImage,
   CoinglassSnapshot,
   CoinglassSymbol,
   PendingCapture,
@@ -94,13 +96,15 @@ async function scrapeCoinglass(request: CoinglassScrapeRequest): Promise<void> {
     sections: request.sections,
     status: 'scraping',
     data: {},
+    screenshots: [],
     warnings: [],
     errors: [],
   };
 
   try {
-    const tab = await findOrOpenCoinglassTab();
-    if (!tab.id) throw new Error('Coinglass tab has no id');
+    const previousActiveTab = await getActiveTab();
+    const jsonTab = await findOrOpenCoinglassTab('json');
+    if (!jsonTab.id) throw new Error('Coinglass JSON tab has no id');
 
     for (const symbol of request.symbols) {
       snapshot.data[symbol] ??= {};
@@ -114,7 +118,7 @@ async function scrapeCoinglass(request: CoinglassScrapeRequest): Promise<void> {
           const ratios: Record<string, unknown> = {};
           for (const timeframe of ['1h', '4h', '12h', '24h'] as const) {
             try {
-              ratios[timeframe] = await scrapeCoinglassPage(tab.id, section, symbol, timeframe);
+              ratios[timeframe] = await scrapeCoinglassPage(jsonTab.id, section, symbol, timeframe);
             } catch (error) {
               snapshot.errors.push(`${section} ${symbol} ${timeframe}: ${error instanceof Error ? error.message : String(error)}`);
             }
@@ -123,7 +127,7 @@ async function scrapeCoinglass(request: CoinglassScrapeRequest): Promise<void> {
           snapshot.data[symbol][section] = ratios;
         } else {
           try {
-            snapshot.data[symbol][section] = await scrapeCoinglassPage(tab.id, section, symbol);
+            snapshot.data[symbol][section] = await scrapeCoinglassPage(jsonTab.id, section, symbol);
           } catch (error) {
             snapshot.errors.push(`${section} ${symbol}: ${error instanceof Error ? error.message : String(error)}`);
           }
@@ -131,6 +135,8 @@ async function scrapeCoinglass(request: CoinglassScrapeRequest): Promise<void> {
         }
       }
     }
+
+    await scrapeCoinglassScreenshots(request, snapshot, previousActiveTab);
 
     snapshot.status = snapshotHasData(snapshot)
       ? snapshot.errors.length > 0 || snapshot.warnings.length > 0 ? 'partial' : 'success'
@@ -147,11 +153,139 @@ async function scrapeCoinglass(request: CoinglassScrapeRequest): Promise<void> {
 }
 
 function snapshotHasData(snapshot: CoinglassSnapshot): boolean {
+  if ((snapshot.screenshots?.length ?? 0) > 0) return true;
   return Object.values(snapshot.data).some((sections) => (
     sections && Object.values(sections).some((value) => value && (
       typeof value !== 'object' || Object.keys(value as Record<string, unknown>).length > 0
     ))
   ));
+}
+
+async function scrapeCoinglassScreenshots(
+  request: CoinglassScrapeRequest,
+  snapshot: CoinglassSnapshot,
+  previousActiveTab: chrome.tabs.Tab | null
+): Promise<void> {
+  const settings = request.screenshots;
+  if (!settings?.liquidationHeatmap && !settings?.liquidationMap) return;
+  const tab = await findOrOpenCoinglassTab('screenshots');
+  if (!tab.id) return;
+
+  try {
+    if (settings.liquidationHeatmap) {
+      const timeframes = enabledHeatmapTimeframes(settings.heatmapTimeframes);
+      for (const symbol of request.symbols) {
+        for (const timeframe of timeframes) {
+          try {
+            snapshot.screenshots?.push(await captureCoinglassScreenshot(tab, {
+              kind: 'liquidationHeatmap',
+              symbol,
+              timeframe,
+            }));
+          } catch (error) {
+            snapshot.errors.push(`liquidationHeatmap ${symbol} ${timeframe}: ${error instanceof Error ? error.message : String(error)}`);
+          }
+          await delay(COINGLASS_PAGE_DELAY_MS);
+        }
+      }
+    }
+
+    if (settings.liquidationMap) {
+      if (request.symbols.includes('BTC')) {
+        try {
+          snapshot.screenshots?.push(await captureCoinglassScreenshot(tab, {
+            kind: 'liquidationMapChart1',
+            symbol: 'BTC',
+            timeframe: '7d',
+          }));
+        } catch (error) {
+          snapshot.errors.push(`liquidationMap chart1 BTC 7d: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        await delay(COINGLASS_PAGE_DELAY_MS);
+      }
+
+      for (const symbol of request.symbols) {
+        try {
+          snapshot.screenshots?.push(await captureCoinglassScreenshot(tab, {
+            kind: 'liquidationMapChart2',
+            symbol,
+            timeframe: '7d',
+          }));
+        } catch (error) {
+          snapshot.errors.push(`liquidationMap chart2 ${symbol} 7d: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        await delay(COINGLASS_PAGE_DELAY_MS);
+      }
+    }
+  } finally {
+    await restoreActiveTab(previousActiveTab);
+  }
+}
+
+async function captureCoinglassScreenshot(
+  tab: chrome.tabs.Tab,
+  target: Extract<ExtensionMessage, { type: 'CG_PREPARE_SCREENSHOT_TARGET' }>['target']
+): Promise<CoinglassScreenshotImage> {
+  if (!tab.id) throw new Error('Coinglass tab has no id');
+  await emitCoinglassProgress({
+    page: 'liquidationsTotals',
+    symbol: target.symbol,
+    message: `Capturing ${coinglassScreenshotLabel(target.kind)} ${target.symbol} ${target.timeframe}`,
+  });
+
+  const url = target.kind === 'liquidationHeatmap'
+    ? coinglassLiquidationHeatmapUrl(target.symbol)
+    : coinglassLiquidationMapUrl();
+  await chrome.tabs.update(tab.id, { url: withCoinglassTabMarker(url, 'screenshots'), active: true });
+  await waitForTabComplete(tab.id);
+  await delay(COINGLASS_LOAD_DELAY_MS);
+  await ensureCoinglassContentScript(tab.id);
+
+  const prepared = await chrome.tabs.sendMessage(tab.id, {
+    type: 'CG_PREPARE_SCREENSHOT_TARGET',
+    target,
+  } satisfies ExtensionMessage).catch((error) => ({ success: false, error: String(error) }));
+  if (!prepared?.success || !prepared.rect || !prepared.viewport) {
+    throw new Error(prepared?.error ?? `Could not prepare ${target.kind}`);
+  }
+
+  const fullDataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+  const dataUrl = await cropDataUrl(fullDataUrl, prepared.rect, prepared.viewport.devicePixelRatio);
+  const id = generateId();
+  return {
+    id,
+    filename: coinglassScreenshotFilename(target, id),
+    mimeType: 'image/png',
+    dataUrl,
+    symbol: target.symbol,
+    timeframe: target.timeframe,
+    kind: target.kind,
+    title: prepared.title ?? coinglassScreenshotLabel(target.kind),
+  };
+}
+
+function enabledHeatmapTimeframes(
+  timeframes: NonNullable<CoinglassScrapeRequest['screenshots']>['heatmapTimeframes']
+): CoinglassHeatmapTimeframe[] {
+  return (['24h', '7d', '12h'] as CoinglassHeatmapTimeframe[]).filter((timeframe) => timeframes[timeframe]);
+}
+
+function coinglassScreenshotLabel(kind: CoinglassScreenshotImage['kind']): string {
+  if (kind === 'liquidationHeatmap') return 'liquidation heatmap';
+  if (kind === 'liquidationMapChart1') return 'liquidation map chart 1';
+  return 'liquidation map chart 2';
+}
+
+function coinglassScreenshotFilename(
+  target: Extract<ExtensionMessage, { type: 'CG_PREPARE_SCREENSHOT_TARGET' }>['target'],
+  id: string
+): string {
+  const kind = target.kind === 'liquidationHeatmap'
+    ? 'liquidation-heatmap'
+    : target.kind === 'liquidationMapChart1'
+      ? 'liquidation-map_chart1'
+      : 'liquidation-map_chart2';
+  return `coinglass_${target.symbol}_${kind}_${target.timeframe}_${id}.png`;
 }
 
 async function scrapeCoinglassPage(
@@ -166,7 +300,7 @@ async function scrapeCoinglassPage(
     message: `Scraping ${section} ${symbol}${timeframe ? ` ${timeframe}` : ''}`,
   });
 
-  await chrome.tabs.update(tabId, { url: coinglassUrl(section, symbol), active: true });
+  await chrome.tabs.update(tabId, { url: withCoinglassTabMarker(coinglassUrl(section, symbol), 'json'), active: false });
   await waitForTabComplete(tabId);
   await delay(COINGLASS_LOAD_DELAY_MS);
   await ensureCoinglassContentScript(tabId);
@@ -185,11 +319,35 @@ async function scrapeCoinglassPage(
   return response.data;
 }
 
-async function findOrOpenCoinglassTab(): Promise<chrome.tabs.Tab> {
+async function findOrOpenCoinglassTab(role: 'json' | 'screenshots'): Promise<chrome.tabs.Tab> {
+  const marker = coinglassTabMarker(role);
   const tabs = await chrome.tabs.query({});
-  const existing = tabs.find((tab) => isCoinglassUrl(tab.url));
+  const existing = tabs.find((tab) => isCoinglassUrl(tab.url) && tab.url?.includes(marker));
   if (existing) return existing;
-  return chrome.tabs.create({ url: 'https://www.coinglass.com/', active: true });
+  return chrome.tabs.create({ url: `https://www.coinglass.com/#bare-meat-${role}`, active: role === 'screenshots' });
+}
+
+function coinglassTabMarker(role: 'json' | 'screenshots'): string {
+  return `bare-meat-${role}`;
+}
+
+function withCoinglassTabMarker(url: string, role: 'json' | 'screenshots'): string {
+  const parsed = new URL(url);
+  parsed.hash = coinglassTabMarker(role);
+  return parsed.toString();
+}
+
+async function getActiveTab(): Promise<chrome.tabs.Tab | null> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab ?? null;
+}
+
+async function restoreActiveTab(tab: chrome.tabs.Tab | null): Promise<void> {
+  if (!tab?.id) return;
+  await chrome.tabs.update(tab.id, { active: true }).catch(() => {});
+  if (tab.windowId !== undefined) {
+    await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+  }
 }
 
 function isCoinglassUrl(url: string | undefined): boolean {
@@ -395,6 +553,35 @@ async function readClipboardImage(pending: PendingCapture): Promise<ClipboardRea
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function cropDataUrl(
+  dataUrl: string,
+  rect: { x: number; y: number; width: number; height: number },
+  devicePixelRatio: number
+): Promise<string> {
+  const sourceBlob = dataUrlToBlob(dataUrl, 'image/png');
+  const image = await createImageBitmap(sourceBlob);
+  const scale = devicePixelRatio || 1;
+  const sx = Math.max(0, Math.round(rect.x * scale));
+  const sy = Math.max(0, Math.round(rect.y * scale));
+  const sw = Math.min(image.width - sx, Math.round(rect.width * scale));
+  const sh = Math.min(image.height - sy, Math.round(rect.height * scale));
+  if (sw <= 0 || sh <= 0) throw new Error('Coinglass chart crop was outside the viewport');
+
+  const canvas = new OffscreenCanvas(sw, sh);
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('Could not create Coinglass screenshot crop context');
+  context.drawImage(image, sx, sy, sw, sh, 0, 0, sw, sh);
+  const blob = await canvas.convertToBlob({ type: 'image/png' });
+  return blobToDataUrl(blob);
+}
+
+async function blobToDataUrl(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return `data:${blob.type || 'image/png'};base64,${btoa(binary)}`;
 }
 
 function dataUrlToBlob(dataUrl: string, fallbackMimeType: string): Blob {

@@ -6,7 +6,8 @@ export async function clearStoredCoinglassSnapshot(): Promise<void> {
 }
 
 export async function saveCoinglassSnapshot(snapshot: CoinglassSnapshot): Promise<void> {
-  await chrome.storage.local.set({ [COINGLASS_STORAGE_KEYS.snapshot]: snapshot });
+  const { screenshots: _screenshots, ...storedSnapshot } = snapshot;
+  await chrome.storage.local.set({ [COINGLASS_STORAGE_KEYS.snapshot]: storedSnapshot });
 }
 
 export async function loadCoinglassSnapshot(): Promise<CoinglassSnapshot | null> {

@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import SettingsModal from './components/SettingsModal';
 import type { ExtensionMessage } from '../../src/messaging/protocol';
-import type { ChatTarget, CoinglassSection, CoinglassSettings, CoinglassSnapshot, CoinglassSymbol, PromptSettings, ScreenshotMeta, TargetStatus, TradingViewTelemetrySnapshot } from '../../src/types';
+import type { ChatTarget, CoinglassHeatmapTimeframe, CoinglassScreenshotSettings, CoinglassSection, CoinglassSettings, CoinglassSnapshot, CoinglassSymbol, PromptSettings, ScreenshotMeta, TargetStatus, TradingViewTelemetrySnapshot } from '../../src/types';
 import * as db from '../../src/storage/db';
-import { COINGLASS_STORAGE_KEYS, DEFAULT_COINGLASS_SETTINGS, enabledCoinglassSections, mergeCoinglassSettings } from '../../src/providers/coinglass/config';
+import { COINGLASS_STORAGE_KEYS, DEFAULT_COINGLASS_SCREENSHOT_SETTINGS, DEFAULT_COINGLASS_SETTINGS, enabledCoinglassSections, mergeCoinglassScreenshotSettings, mergeCoinglassSettings } from '../../src/providers/coinglass/config';
 import { loadCoinglassSnapshot } from '../../src/providers/coinglass/storage';
 import { isTradingViewScreenshot, validateTelemetryIntegrity, type TelemetryIntegrityResult } from '../../src/tradingview/telemetry-integrity';
 import { resolveMatchingTargets } from '../../src/routing/target-resolver';
@@ -28,6 +28,7 @@ export default function SidePanelApp(): JSX.Element {
   const [includeScrapedData, setIncludeScrapedData] = useState(true);
   const [includeCoinglassData, setIncludeCoinglassData] = useState(false);
   const [coinglassSettings, setCoinglassSettings] = useState<CoinglassSettings>(DEFAULT_COINGLASS_SETTINGS);
+  const [coinglassScreenshotSettings, setCoinglassScreenshotSettings] = useState<CoinglassScreenshotSettings>(DEFAULT_COINGLASS_SCREENSHOT_SETTINGS);
   const [coinglassSnapshot, setCoinglassSnapshot] = useState<CoinglassSnapshot | null>(null);
   const [coinglassState, setCoinglassState] = useState<'idle' | 'scraping' | 'success' | 'partial' | 'error'>('idle');
   const [coinglassMessage, setCoinglassMessage] = useState('');
@@ -140,10 +141,12 @@ export default function SidePanelApp(): JSX.Element {
     const result = await chrome.storage.local.get([
       COINGLASS_STORAGE_KEYS.include,
       COINGLASS_STORAGE_KEYS.settings,
+      COINGLASS_STORAGE_KEYS.screenshotSettings,
       COINGLASS_STORAGE_KEYS.manualSymbols,
     ]);
     setIncludeCoinglassData(result[COINGLASS_STORAGE_KEYS.include] === true);
     setCoinglassSettings(mergeCoinglassSettings(result[COINGLASS_STORAGE_KEYS.settings]));
+    setCoinglassScreenshotSettings(mergeCoinglassScreenshotSettings(result[COINGLASS_STORAGE_KEYS.screenshotSettings]));
     setManualCoinglassSymbols(normalizeCoinglassSymbols(result[COINGLASS_STORAGE_KEYS.manualSymbols]));
     const snapshot = await loadCoinglassSnapshot();
     setCoinglassSnapshot(snapshot);
@@ -171,6 +174,10 @@ export default function SidePanelApp(): JSX.Element {
   const coinglassSymbols = useMemo(() => (
     screenshots.length > 0 ? symbolsFromScreenshots(screenshots) : manualCoinglassSymbols
   ), [screenshots, manualCoinglassSymbols]);
+  const coinglassImageScreenshots = coinglassSnapshot?.screenshots ?? [];
+  const hasCoinglassScreenshots = (coinglassSnapshot?.screenshots?.length ?? 0) > 0;
+  const hasVisibleScreenshots = screenshots.length > 0 || hasCoinglassScreenshots;
+  const canDispatchCoinglass = Boolean(coinglassSnapshot && (includeCoinglassData || hasCoinglassScreenshots));
 
   async function persistChatTargets(nextTargets: ChatTarget[]): Promise<void> {
     setChatTargets(nextTargets);
@@ -225,6 +232,30 @@ export default function SidePanelApp(): JSX.Element {
     await chrome.storage.local.set({ [COINGLASS_STORAGE_KEYS.settings]: nextSettings });
   }
 
+  async function handleCoinglassScreenshotSettingChange(
+    key: 'liquidationHeatmap' | 'liquidationMap',
+    value: boolean
+  ): Promise<void> {
+    const nextSettings = { ...coinglassScreenshotSettings, [key]: value };
+    setCoinglassScreenshotSettings(nextSettings);
+    await chrome.storage.local.set({ [COINGLASS_STORAGE_KEYS.screenshotSettings]: nextSettings });
+  }
+
+  async function handleCoinglassHeatmapTimeframeChange(
+    timeframe: CoinglassHeatmapTimeframe,
+    value: boolean
+  ): Promise<void> {
+    const nextSettings = {
+      ...coinglassScreenshotSettings,
+      heatmapTimeframes: {
+        ...coinglassScreenshotSettings.heatmapTimeframes,
+        [timeframe]: value,
+      },
+    };
+    setCoinglassScreenshotSettings(nextSettings);
+    await chrome.storage.local.set({ [COINGLASS_STORAGE_KEYS.screenshotSettings]: nextSettings });
+  }
+
   async function handleManualCoinglassSymbolChange(symbol: CoinglassSymbol, enabled: boolean): Promise<void> {
     const nextSymbols = enabled
       ? [...new Set([...manualCoinglassSymbols, symbol])]
@@ -236,9 +267,11 @@ export default function SidePanelApp(): JSX.Element {
 
   async function handleScrapeCoinglass(): Promise<void> {
     const sections = enabledCoinglassSections(coinglassSettings);
-    if (coinglassSymbols.length === 0 || sections.length === 0) {
+    const hasScreenshotSections = coinglassScreenshotSettings.liquidationMap
+      || (coinglassScreenshotSettings.liquidationHeatmap && enabledCoinglassHeatmapTimeframes(coinglassScreenshotSettings).length > 0);
+    if (coinglassSymbols.length === 0 || (sections.length === 0 && !hasScreenshotSections)) {
       setCoinglassState('error');
-      setCoinglassMessage('Select at least one symbol and one Coinglass section.');
+      setCoinglassMessage('Select at least one symbol and one Coinglass data section or screenshot option.');
       return;
     }
 
@@ -251,6 +284,7 @@ export default function SidePanelApp(): JSX.Element {
       request: {
         symbols: coinglassSymbols,
         sections,
+        screenshots: coinglassScreenshotSettings,
       },
     } satisfies ExtensionMessage);
   }
@@ -323,14 +357,18 @@ export default function SidePanelApp(): JSX.Element {
 
   async function handleClearAnalysis(): Promise<void> {
     await db.clearScreenshots();
+    await chrome.storage.local.remove(COINGLASS_STORAGE_KEYS.snapshot);
     await chrome.storage.local.set({ additional_prompt: '' });
     setAdditionalPrompt('');
+    setCoinglassSnapshot(null);
+    setCoinglassState('idle');
+    setCoinglassMessage('');
     setTargetStatuses({});
     await loadScreenshots();
   }
 
   async function handlePrepareChats(): Promise<void> {
-    const canDispatchCoinglassOnly = screenshots.length === 0 && includeCoinglassData && coinglassSnapshot;
+    const canDispatchCoinglassOnly = screenshots.length === 0 && canDispatchCoinglass;
     if ((!canDispatchCoinglassOnly && screenshots.length === 0) || dispatchTargets.length === 0) return;
     if (includeCoinglassData && !coinglassSnapshot) {
       setCoinglassState('error');
@@ -342,22 +380,17 @@ export default function SidePanelApp(): JSX.Element {
     try {
       let dispatchTelemetry: TradingViewTelemetrySnapshot | undefined;
       if (includeScrapedData && screenshots.length > 0) {
-        setTelemetryScrapeState('scraping');
-        setTelemetryScrapeMessage('Refreshing CTX data before submit...');
-        const telemetry = await scrapeActiveTradingViewTelemetry().catch((error) => {
-          if (manualTelemetryPreview?.valid) return manualTelemetryPreview;
-          throw error;
-        });
-        dispatchTelemetry = telemetry;
-        await updateMatchingScreenshotTelemetry(telemetry);
-        const metricCount = Object.keys(telemetry.metrics).length;
-        setTelemetryScrapeState(telemetry.valid ? telemetry.quality === 'partial' ? 'warning' : 'success' : 'error');
-        setTelemetryScrapeMessage(telemetry.valid
-          ? telemetry.quality === 'partial'
-            ? `Including partial ${telemetry.symbol} ${telemetry.timeframe} CTX data with ${metricCount} metrics.`
-            : `Including fresh ${telemetry.symbol} ${telemetry.timeframe} CTX data with ${metricCount} metrics.`
-          : `Fresh scrape failed validation: ${telemetry.errors.join('; ')}`);
-        if (!telemetry.valid) return;
+        dispatchTelemetry = pickSubmitTelemetry(screenshots, manualTelemetryPreview);
+        if (dispatchTelemetry) {
+          const metricCount = Object.keys(dispatchTelemetry.metrics).length;
+          setTelemetryScrapeState(dispatchTelemetry.quality === 'partial' ? 'warning' : 'success');
+          setTelemetryScrapeMessage(dispatchTelemetry.quality === 'partial'
+            ? `Including saved partial ${dispatchTelemetry.symbol} ${dispatchTelemetry.timeframe} CTX data with ${metricCount} metrics.`
+            : `Including saved ${dispatchTelemetry.symbol} ${dispatchTelemetry.timeframe} CTX data with ${metricCount} metrics.`);
+        } else {
+          setTelemetryScrapeState('warning');
+          setTelemetryScrapeMessage('Submitting without fresh TradingView scrape; no active TradingView tab is required.');
+        }
       }
 
       await chrome.runtime.sendMessage({
@@ -482,7 +515,7 @@ export default function SidePanelApp(): JSX.Element {
       </div>
 
       <div className="screenshots-panel">
-        {screenshots.length === 0 ? (
+        {!hasVisibleScreenshots ? (
           <div className="empty-state">
             No screenshots yet.<br />Go to TradingView and press Shift+Ctrl+S on Windows or Shift+Cmd+S on Mac.
           </div>
@@ -511,8 +544,27 @@ export default function SidePanelApp(): JSX.Element {
                 </div>
               </div>
             ))}
+            {coinglassImageScreenshots.length > 0 && (
+              <div className="screenshot-group">
+                <h3 className="screenshot-group__title">COINGLASS</h3>
+                <div className="screenshot-grid">
+                  {coinglassImageScreenshots.map((screenshot) => (
+                    <div key={screenshot.id} className="screenshot-card screenshot-card--coinglass">
+                      <div className="screenshot-card__header">
+                        <span>{screenshot.symbol} {screenshot.timeframe}</span>
+                        <span className="screenshot-card__kind">{formatCoinglassScreenshotKind(screenshot.kind)}</span>
+                      </div>
+                      <a href={screenshot.dataUrl} target="_blank" rel="noreferrer">
+                        <img className="screenshot-card__image" src={screenshot.dataUrl} alt={`${screenshot.symbol} ${screenshot.timeframe} ${screenshot.title}`} />
+                      </a>
+                      <div className="screenshot-card__time">{screenshot.title}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             <div className="screenshot-summary">
-              {screenshots.length} screenshot(s) · {Object.keys(groupedScreenshots).length} symbol(s)
+              {screenshots.length + coinglassImageScreenshots.length} screenshot(s) · {Object.keys(groupedScreenshots).length + (coinglassImageScreenshots.length > 0 ? 1 : 0)} group(s)
             </div>
           </>
         )}
@@ -604,6 +656,39 @@ export default function SidePanelApp(): JSX.Element {
               </label>
             ))}
           </div>
+          <div className="coinglass-screenshots">
+            <label className="coinglass-setting">
+              <input
+                className="control-checkbox"
+                type="checkbox"
+                checked={coinglassScreenshotSettings.liquidationHeatmap}
+                onChange={(event) => void handleCoinglassScreenshotSettingChange('liquidationHeatmap', event.target.checked)}
+              />
+              Liquidation heatmap screenshots
+            </label>
+            <label className="coinglass-setting">
+              <input
+                className="control-checkbox"
+                type="checkbox"
+                checked={coinglassScreenshotSettings.liquidationMap}
+                onChange={(event) => void handleCoinglassScreenshotSettingChange('liquidationMap', event.target.checked)}
+              />
+              Liquidation map screenshots
+            </label>
+            <div className="coinglass-timeframes">
+              {(['24h', '7d', '12h'] as CoinglassHeatmapTimeframe[]).map((timeframe) => (
+                <label key={timeframe} className="coinglass-chip">
+                  <input
+                    className="control-checkbox"
+                    type="checkbox"
+                    checked={coinglassScreenshotSettings.heatmapTimeframes[timeframe]}
+                    onChange={(event) => void handleCoinglassHeatmapTimeframeChange(timeframe, event.target.checked)}
+                  />
+                  {timeframe}
+                </label>
+              ))}
+            </div>
+          </div>
           <div className="coinglass-preview__actions">
             <button
               className="coinglass-preview__button"
@@ -633,7 +718,7 @@ export default function SidePanelApp(): JSX.Element {
       <div className="action-bar">
         <button
           className="action-button action-button--submit"
-          disabled={dispatchTargets.length === 0 || isSubmitting || (screenshots.length === 0 && (!includeCoinglassData || !coinglassSnapshot))}
+          disabled={dispatchTargets.length === 0 || isSubmitting || (screenshots.length === 0 && !canDispatchCoinglass)}
           onClick={() => void handlePrepareChats()}
         >
           {isSubmitting ? 'Preparing...' : 'Submit'}
@@ -649,7 +734,7 @@ export default function SidePanelApp(): JSX.Element {
         </label>
         <button
           className="action-button"
-          disabled={screenshots.length === 0}
+          disabled={!hasVisibleScreenshots}
           onClick={() => void handleClearAnalysis()}
         >
           Clear analysis
@@ -679,13 +764,17 @@ function CoinglassSnapshotPreview({ snapshot }: { snapshot: CoinglassSnapshot | 
   return (
     <details className="coinglass-result" open>
       <summary className="coinglass-result__summary">
-        <span>{snapshot.symbols.join(', ')} · {snapshot.sections.length} section(s)</span>
+        <span>
+          {snapshot.symbols.join(', ')} · {snapshot.sections.length} section(s)
+          {(snapshot.screenshots?.length ?? 0) > 0 ? ` · ${snapshot.screenshots?.length} image(s)` : ''}
+        </span>
         <span className={`coinglass-result__status coinglass-result__status--${snapshot.status}`}>
           {snapshot.status}
         </span>
       </summary>
       <div className="coinglass-result__meta">
         Captured {new Date(snapshot.capturedAt).toLocaleTimeString()}
+        {(snapshot.screenshots?.length ?? 0) > 0 ? ` · ${snapshot.screenshots?.length} image(s)` : ''}
       </div>
       {snapshot.warnings.length > 0 && (
         <div className="coinglass-result__warning">
@@ -906,6 +995,20 @@ function pickGeneralTelemetry(
   return null;
 }
 
+function pickSubmitTelemetry(
+  screenshots: ScreenshotMeta[],
+  manualPreview: TradingViewTelemetrySnapshot | null
+): TradingViewTelemetrySnapshot | undefined {
+  return [
+    ...(manualPreview ? [manualPreview] : []),
+    ...screenshots
+      .map((screenshot) => screenshot.tradingViewTelemetry)
+      .filter((telemetry): telemetry is TradingViewTelemetrySnapshot => Boolean(telemetry)),
+  ]
+    .filter((telemetry) => telemetry.valid)
+    .sort((a, b) => b.capturedAt - a.capturedAt)[0];
+}
+
 function formatTelemetryGroupName(group: string): string {
   const names: Record<string, string> = {
     CME: 'CME',
@@ -980,12 +1083,25 @@ function formatCoinglassSection(section: CoinglassSection): string {
   return names[section];
 }
 
+function formatCoinglassScreenshotKind(kind: NonNullable<CoinglassSnapshot['screenshots']>[number]['kind']): string {
+  if (kind === 'liquidationHeatmap') return 'Heatmap';
+  if (kind === 'liquidationMapChart1') return 'Map 1';
+  return 'Map 2';
+}
+
 function coinglassSummaryMessage(snapshot: CoinglassSnapshot): string {
   const symbolCount = snapshot.symbols.length;
   const sectionCount = snapshot.sections.length;
-  if (snapshot.status === 'success') return `Scraped ${symbolCount} symbol(s), ${sectionCount} section(s).`;
-  if (snapshot.status === 'partial') return `Scraped with ${snapshot.warnings.length} warning(s).`;
+  const imageCount = snapshot.screenshots?.length ?? 0;
+  const imageText = imageCount > 0 ? ` and ${imageCount} image(s)` : '';
+  if (snapshot.status === 'success') return `Scraped ${symbolCount} symbol(s), ${sectionCount} section(s)${imageText}.`;
+  if (snapshot.status === 'partial') return `Scraped with ${snapshot.warnings.length} warning(s)${imageText}.`;
   return snapshot.errors.join('; ') || 'Coinglass scrape failed.';
+}
+
+function enabledCoinglassHeatmapTimeframes(settings: CoinglassScreenshotSettings): CoinglassHeatmapTimeframe[] {
+  return (['24h', '7d', '12h'] as CoinglassHeatmapTimeframe[])
+    .filter((timeframe) => settings.heatmapTimeframes[timeframe]);
 }
 
 function labelsFromFilename(filename: string): { symbol: string; timeframe: string } {

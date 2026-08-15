@@ -7,7 +7,18 @@ export const CHATGPT_COMPOSER_SELECTORS = [
 ];
 
 export const CHATGPT_FILE_INPUT_SELECTORS = [
+  'input[type="file"][accept*="image"]',
+  'input[type="file"][accept*="json"]',
   'input[type="file"]',
+];
+
+export const CHATGPT_ATTACHMENT_BUTTON_SELECTORS = [
+  'button[aria-label*="Attach" i]',
+  'button[aria-label*="Upload" i]',
+  'button[data-testid*="attach" i]',
+  'button[data-testid*="upload" i]',
+  '[role="button"][aria-label*="Attach" i]',
+  '[role="button"][aria-label*="Upload" i]',
 ];
 
 export const CHATGPT_SEND_SELECTORS = [

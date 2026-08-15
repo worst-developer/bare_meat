@@ -2,6 +2,7 @@ import type {
   CoinglassScrapeProgress,
   CoinglassScrapeRequest,
   CoinglassSection,
+  CoinglassHeatmapTimeframe,
   CoinglassSymbol,
   CoinglassSnapshot,
   IncomingScreenshot,
@@ -21,6 +22,14 @@ export type ExtensionMessage =
   | { type: 'CG_SCRAPE_COMPLETE'; snapshot: CoinglassSnapshot }
   | { type: 'CG_SCRAPE_FAILED'; snapshot: CoinglassSnapshot }
   | { type: 'CG_SCRAPE_PAGE'; section: CoinglassSection; symbol: CoinglassSymbol; timeframe?: '1h' | '4h' | '12h' | '24h' }
+  | {
+    type: 'CG_PREPARE_SCREENSHOT_TARGET';
+    target: {
+      kind: 'liquidationHeatmap' | 'liquidationMapChart1' | 'liquidationMapChart2';
+      symbol: CoinglassSymbol;
+      timeframe: CoinglassHeatmapTimeframe;
+    };
+  }
   | { type: 'SCREENSHOT_UPDATE'; screenshot: ScreenshotMeta }
   | { type: 'DISPATCH_REQUEST'; screenshotKeys: string[]; additionalPrompt: string; targetIds: string[]; basePrompt: string; autosubmit: boolean; includeScrapedData: boolean; telemetry?: ScreenshotMeta['tradingViewTelemetry']; includeCoinglassData?: boolean; coinglassSnapshot?: CoinglassSnapshot }
   | { type: 'DISPATCH_STATUS_UPDATE'; targetId: string; state: TargetDispatchState; message?: string; progress?: number }
