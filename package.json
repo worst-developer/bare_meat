@@ -1,7 +1,7 @@
 {
   "name": "bare-meat",
   "displayName": "bare meat🧸🥩",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "__MSG_extDescription__",
   "type": "module",
   "scripts": {
