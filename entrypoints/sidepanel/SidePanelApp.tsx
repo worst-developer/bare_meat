@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import SettingsModal from './components/SettingsModal';
+import { SOURCE_LOGOS, logoForProvider, providerLogoNeedsBackplate } from './logos';
 import type { ExtensionMessage } from '../../src/messaging/protocol';
-import type { ChatTarget, CoinglassHeatmapTimeframe, CoinglassScreenshotSettings, CoinglassSection, CoinglassSettings, CoinglassSnapshot, CoinglassSymbol, PromptSettings, ScreenshotMeta, TargetStatus, TradingViewTelemetrySnapshot } from '../../src/types';
+import type { ChatTarget, CoinglassHeatmapTimeframe, CoinglassScreenshotSettings, CoinglassSection, CoinglassSettings, CoinglassSnapshot, CoinglassSymbol, PromptSettings, ScreenshotMeta, TradingViewTelemetrySnapshot } from '../../src/types';
 import * as db from '../../src/storage/db';
 import { COINGLASS_STORAGE_KEYS, DEFAULT_COINGLASS_SCREENSHOT_SETTINGS, DEFAULT_COINGLASS_SETTINGS, enabledCoinglassSections, mergeCoinglassScreenshotSettings, mergeCoinglassSettings } from '../../src/providers/coinglass/config';
 import { loadCoinglassSnapshot } from '../../src/providers/coinglass/storage';
@@ -14,16 +15,26 @@ import { buildScreenshotKey, computeHash, generateId, normalizeSymbol } from '..
 const DEFAULT_PROMPT =
   'You are an expert multi-timeframe market analyst. Analyze the attached TradingView charts professionally and identify key support/resistance levels, trend direction, potential entries, exits, and risk management recommendations.';
 
+const COINGLASS_MARKET_DATA_SECTIONS: CoinglassSection[] = [
+  'openInterest',
+  'fundingRateSymbol',
+  'fundingRate',
+  'longShortRatio',
+  'etf',
+  'basis',
+  'spotInflowOutflow',
+];
+
 export default function SidePanelApp(): JSX.Element {
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(() => new Date());
+  const [activePanel, setActivePanel] = useState<'config' | 'timeline'>('config');
   const [screenshots, setScreenshots] = useState<ScreenshotMeta[]>([]);
   const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({});
   const [additionalPrompt, setAdditionalPrompt] = useState('');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [chatTargets, setChatTargets] = useState<ChatTarget[]>([]);
   const [promptSettings, setPromptSettings] = useState<PromptSettings>({ basePrompt: DEFAULT_PROMPT });
-  const [targetStatuses, setTargetStatuses] = useState<Record<string, TargetStatus>>({});
   const [autosubmit, setAutosubmit] = useState(false);
   const [includeScrapedData, setIncludeScrapedData] = useState(true);
   const [includeCoinglassData, setIncludeCoinglassData] = useState(false);
@@ -44,19 +55,8 @@ export default function SidePanelApp(): JSX.Element {
 
     const onMessageReceived = (message: ExtensionMessage) => {
       if (message.type === 'SCREENSHOT_UPDATE') {
+        upsertScreenshot(message.screenshot);
         void loadScreenshots();
-      }
-
-      if (message.type === 'DISPATCH_STATUS_UPDATE') {
-        setTargetStatuses((prev) => ({
-          ...prev,
-          [message.targetId]: {
-            targetId: message.targetId,
-            state: message.state,
-            message: message.message,
-            progress: message.progress,
-          },
-        }));
       }
 
       if (message.type === 'CG_SCRAPE_PROGRESS') {
@@ -73,6 +73,22 @@ export default function SidePanelApp(): JSX.Element {
 
     chrome.runtime.onMessage.addListener(onMessageReceived);
     return () => chrome.runtime.onMessage.removeListener(onMessageReceived);
+  }, []);
+
+  useEffect(() => {
+    const refreshScreenshots = () => {
+      if (document.visibilityState !== 'hidden') void loadScreenshots();
+    };
+
+    const timer = window.setInterval(refreshScreenshots, 2000);
+    window.addEventListener('focus', refreshScreenshots);
+    document.addEventListener('visibilitychange', refreshScreenshots);
+
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refreshScreenshots);
+      document.removeEventListener('visibilitychange', refreshScreenshots);
+    };
   }, []);
 
   useEffect(() => {
@@ -119,7 +135,24 @@ export default function SidePanelApp(): JSX.Element {
 
   async function loadScreenshots(): Promise<void> {
     const records = await db.listScreenshots();
-    setScreenshots(sortScreenshots(records));
+    replaceScreenshots(records);
+  }
+
+  function replaceScreenshots(records: ScreenshotMeta[]): void {
+    setScreenshots((current) => {
+      const next = sortScreenshots(records);
+      return sameScreenshots(current, next) ? current : next;
+    });
+  }
+
+  function upsertScreenshot(record: ScreenshotMeta): void {
+    setScreenshots((current) => {
+      const next = sortScreenshots([
+        ...current.filter((screenshot) => screenshot.key !== record.key),
+        record,
+      ]);
+      return sameScreenshots(current, next) ? current : next;
+    });
   }
 
   async function loadAdditionalPrompt(): Promise<void> {
@@ -171,13 +204,13 @@ export default function SidePanelApp(): JSX.Element {
   const enabledTargets = chatTargets.filter((target) => target.enabled);
   const matchingTargets = resolveMatchingTargets(screenshots, enabledTargets);
   const dispatchTargets = screenshots.length > 0 ? matchingTargets : enabledTargets;
-  const coinglassSymbols = useMemo(() => (
-    screenshots.length > 0 ? symbolsFromScreenshots(screenshots) : manualCoinglassSymbols
-  ), [screenshots, manualCoinglassSymbols]);
+  const coinglassSymbols = manualCoinglassSymbols;
   const coinglassImageScreenshots = coinglassSnapshot?.screenshots ?? [];
   const hasCoinglassScreenshots = (coinglassSnapshot?.screenshots?.length ?? 0) > 0;
   const hasVisibleScreenshots = screenshots.length > 0 || hasCoinglassScreenshots;
   const canDispatchCoinglass = Boolean(coinglassSnapshot && (includeCoinglassData || hasCoinglassScreenshots));
+  const coinglassMarketDataEnabled = COINGLASS_MARKET_DATA_SECTIONS.some((section) => coinglassSettings[section]);
+  const coinglassHeatmapsEnabled = coinglassScreenshotSettings.liquidationHeatmap || coinglassScreenshotSettings.liquidationMap;
 
   async function persistChatTargets(nextTargets: ChatTarget[]): Promise<void> {
     setChatTargets(nextTargets);
@@ -199,11 +232,6 @@ export default function SidePanelApp(): JSX.Element {
 
   async function handleDeleteChatTarget(targetId: string): Promise<void> {
     await persistChatTargets(chatTargets.filter((target) => target.id !== targetId));
-  }
-
-  async function handleUpdatePromptSettings(settings: PromptSettings): Promise<void> {
-    setPromptSettings(settings);
-    await chrome.storage.local.set({ prompt_settings: settings });
   }
 
   async function handleAdditionalPromptChange(value: string): Promise<void> {
@@ -232,11 +260,30 @@ export default function SidePanelApp(): JSX.Element {
     await chrome.storage.local.set({ [COINGLASS_STORAGE_KEYS.settings]: nextSettings });
   }
 
+  async function handleCoinglassMarketDataChange(value: boolean): Promise<void> {
+    const nextSettings = { ...coinglassSettings };
+    for (const section of COINGLASS_MARKET_DATA_SECTIONS) {
+      nextSettings[section] = value;
+    }
+    setCoinglassSettings(nextSettings);
+    await chrome.storage.local.set({ [COINGLASS_STORAGE_KEYS.settings]: nextSettings });
+  }
+
   async function handleCoinglassScreenshotSettingChange(
     key: 'liquidationHeatmap' | 'liquidationMap',
     value: boolean
   ): Promise<void> {
     const nextSettings = { ...coinglassScreenshotSettings, [key]: value };
+    setCoinglassScreenshotSettings(nextSettings);
+    await chrome.storage.local.set({ [COINGLASS_STORAGE_KEYS.screenshotSettings]: nextSettings });
+  }
+
+  async function handleCoinglassHeatmapsChange(value: boolean): Promise<void> {
+    const nextSettings = {
+      ...coinglassScreenshotSettings,
+      liquidationHeatmap: value,
+      liquidationMap: value,
+    };
     setCoinglassScreenshotSettings(nextSettings);
     await chrome.storage.local.set({ [COINGLASS_STORAGE_KEYS.screenshotSettings]: nextSettings });
   }
@@ -363,7 +410,6 @@ export default function SidePanelApp(): JSX.Element {
     setCoinglassSnapshot(null);
     setCoinglassState('idle');
     setCoinglassMessage('');
-    setTargetStatuses({});
     await loadScreenshots();
   }
 
@@ -442,7 +488,7 @@ export default function SidePanelApp(): JSX.Element {
   }
 
   if (loading) {
-    return <div className="loading-screen">Loading bare meat🧸🥩...</div>;
+    return <div className="loading-screen">Loading workspace...</div>;
   }
 
   return (
@@ -469,285 +515,388 @@ export default function SidePanelApp(): JSX.Element {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         chatTargets={chatTargets}
-        promptSettings={promptSettings}
         onSaveChatTarget={handleSaveChatTarget}
         onDeleteChatTarget={handleDeleteChatTarget}
         onUpdateChatTarget={handleSaveChatTarget}
-        onUpdatePromptSettings={handleUpdatePromptSettings}
-        onClearScreenshots={handleClearAnalysis}
       />
 
-      <div className="app-header">
-        <h1 className="app-header__title">bare meat🧸🥩</h1>
-      </div>
+      <SessionStatusBlock now={now} />
 
-      <div className="agents-panel">
-        <div className="section-title">
-          Agents:
+      <header className="top-controls">
+        <div role="tablist" className="tabs tabs-box tabs-lg app-tabs">
+          <button
+            role="tab"
+            className={`tab${activePanel === 'config' ? ' tab-active' : ''}`}
+            type="button"
+            onClick={() => setActivePanel('config')}
+          >
+            Configuration
+          </button>
+          <button
+            role="tab"
+            className={`tab${activePanel === 'timeline' ? ' tab-active' : ''}`}
+            type="button"
+            onClick={() => setActivePanel('timeline')}
+          >
+            Timeline
+          </button>
         </div>
-        {chatTargets.length === 0 ? (
-          <div className="empty-warning">
-            No chat targets configured.
-          </div>
-        ) : (
-          <div className="agent-list">
-            {chatTargets.map((target) => (
-              <div key={target.id} className={`agent-row${target.enabled ? '' : ' agent-row--disabled'}`}>
-                <div className="agent-row__top">
-                  <label className="agent-row__toggle">
+      </header>
+
+      {activePanel === 'config' ? (
+        <main className="configuration-view">
+          <section className="config-section agents-panel">
+            <div className="section-heading">
+              <div>
+                <h2 className="section-heading__title">Agents</h2>
+              </div>
+              <button
+                className="btn btn-ghost btn-square btn-sm settings-button"
+                type="button"
+                aria-label="Open settings"
+                onClick={() => setIsSettingsOpen(true)}
+              >
+                <span className="settings-icon" aria-hidden="true">⚙</span>
+              </button>
+            </div>
+            {chatTargets.length === 0 ? (
+              <div className="empty-state empty-state--compact">
+                No chat targets configured.
+              </div>
+            ) : (
+              <div className="agent-list">
+                {chatTargets.map((target) => (
+                  <label key={target.id} className={`control-row agent-row${target.enabled ? '' : ' control-row--disabled'}`}>
                     <input
-                      className="control-checkbox"
+                      className="toggle toggle-sm"
                       type="checkbox"
                       checked={target.enabled}
                       onChange={(event) => void handleToggleChatTarget(target.id, event.target.checked)}
                     />
-                    <span className="agent-row__name">{target.name}</span>
+                    <span className="control-row__body">
+                      <span className="control-row__title control-row__title--logo">
+                        <img
+                          className={`service-logo-image agent-logo-image${providerLogoNeedsBackplate(target.provider) ? ' service-logo-image--backplate' : ''}`}
+                          src={logoForProvider(target.provider)}
+                          alt=""
+                          aria-hidden="true"
+                        />
+                        {target.name}
+                      </span>
+                    </span>
                   </label>
-                  <span className={`target-status ${getStatusClass(targetStatuses[target.id]?.state)}`}>
-                    {target.enabled ? getStatusText(targetStatuses[target.id]) : 'Disabled'}
-                  </span>
-                </div>
-                <div className="agent-row__meta">{target.provider.toUpperCase()} · sends selected screenshots</div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="screenshots-panel">
-        {!hasVisibleScreenshots ? (
-          <div className="empty-state">
-            No screenshots yet.<br />Go to TradingView and press Shift+Ctrl+S on Windows or Shift+Cmd+S on Mac.
-          </div>
-        ) : (
-          <>
-            {Object.entries(groupedScreenshots).map(([symbol, group]) => (
-              <div key={symbol} className="screenshot-group">
-                <h3 className="screenshot-group__title">{symbol}</h3>
-                <div className="screenshot-grid">
-                  {group.map((screenshot) => (
-                    <div key={screenshot.key} className="screenshot-card">
-                      <div className="screenshot-card__header">
-                        <span>{screenshot.timeframe}</span>
-                        <button className="remove-button" onClick={() => handleRemoveScreenshot(screenshot.key)}>Remove</button>
-                      </div>
-                      {previewUrls[screenshot.key] ? (
-                        <a href={previewUrls[screenshot.key]} target="_blank" rel="noreferrer">
-                          <img className="screenshot-card__image" src={previewUrls[screenshot.key]} alt={`${screenshot.symbol} ${screenshot.timeframe}`} />
-                        </a>
-                      ) : (
-                        <div className="screenshot-card__placeholder" />
-                      )}
-                      <div className="screenshot-card__time">{new Date(screenshot.capturedAt).toLocaleTimeString()}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-            {coinglassImageScreenshots.length > 0 && (
-              <div className="screenshot-group">
-                <h3 className="screenshot-group__title">COINGLASS</h3>
-                <div className="screenshot-grid">
-                  {coinglassImageScreenshots.map((screenshot) => (
-                    <div key={screenshot.id} className="screenshot-card screenshot-card--coinglass">
-                      <div className="screenshot-card__header">
-                        <span>{screenshot.symbol} {screenshot.timeframe}</span>
-                        <span className="screenshot-card__kind">{formatCoinglassScreenshotKind(screenshot.kind)}</span>
-                      </div>
-                      <a href={screenshot.dataUrl} target="_blank" rel="noreferrer">
-                        <img className="screenshot-card__image" src={screenshot.dataUrl} alt={`${screenshot.symbol} ${screenshot.timeframe} ${screenshot.title}`} />
-                      </a>
-                      <div className="screenshot-card__time">{screenshot.title}</div>
-                    </div>
-                  ))}
-                </div>
+                ))}
               </div>
             )}
-            <div className="screenshot-summary">
-              {screenshots.length + coinglassImageScreenshots.length} screenshot(s) · {Object.keys(groupedScreenshots).length + (coinglassImageScreenshots.length > 0 ? 1 : 0)} group(s)
-            </div>
-          </>
-        )}
-      </div>
+          </section>
 
-      <div className="prompt-panel">
-        <label className="option-row option-row--stacked">
-          <input
-            className="option-row__checkbox"
-            type="checkbox"
-            checked={includeScrapedData}
-            onChange={(event) => void handleIncludeScrapedDataChange(event.target.checked)}
-          />
-          <span>
-            Add scraped TradingView CTX data to prompt
-          </span>
-        </label>
-        <div className="telemetry-preview">
-          <div className="telemetry-preview__header">
-            <span>Preview scraped data</span>
-            <span className={includeScrapedData ? 'telemetry-preview__state telemetry-preview__state--included' : 'telemetry-preview__state'}>
-              {includeScrapedData ? 'Included' : 'Not included'}
-            </span>
-          </div>
-          <div className="telemetry-preview__actions">
-            <button
-              className="telemetry-preview__button"
-              type="button"
-              disabled={telemetryScrapeState === 'scraping' || isSubmitting}
-              onClick={() => void handleScrapeTelemetry()}
-            >
-              {telemetryScrapeState === 'scraping' ? 'Scraping...' : 'Scrape CTX now'}
-            </button>
-            {telemetryScrapeMessage && (
-              <span className={`telemetry-preview__message telemetry-preview__message--${telemetryScrapeState}`}>
-                {telemetryScrapeMessage}
-              </span>
-            )}
-          </div>
-          <TelemetryStatusList
-            screenshots={tradingViewScreenshots}
-            integrity={telemetryIntegrity}
-            manualPreview={manualTelemetryPreview}
-          />
-        </div>
-        <label className="option-row option-row--stacked">
-          <input
-            className="option-row__checkbox"
-            type="checkbox"
-            checked={includeCoinglassData}
-            onChange={(event) => void handleIncludeCoinglassDataChange(event.target.checked)}
-          />
-          <span>
-            Add scraped Coinglass JSON data to prompt
-          </span>
-        </label>
-        <div className="coinglass-preview">
-          <div className="coinglass-preview__header">
-            <span>Coinglass data</span>
-            <span className={includeCoinglassData ? 'coinglass-preview__state coinglass-preview__state--included' : 'coinglass-preview__state'}>
-              {includeCoinglassData ? 'Included' : 'Not included'}
-            </span>
-          </div>
-          {screenshots.length === 0 && (
-            <div className="coinglass-symbols">
-              {(['BTC', 'ETH', 'SOL'] as CoinglassSymbol[]).map((symbol) => (
-                <label key={symbol} className="coinglass-chip">
-                  <input
-                    className="control-checkbox"
-                    type="checkbox"
-                    checked={manualCoinglassSymbols.includes(symbol)}
-                    onChange={(event) => void handleManualCoinglassSymbolChange(symbol, event.target.checked)}
-                  />
-                  {symbol}
-                </label>
-              ))}
+          <section className="config-section">
+            <div className="section-heading">
+              <div>
+                <h2 className="section-heading__title">Prompt data</h2>
+              </div>
             </div>
-          )}
-          <div className="coinglass-settings">
-            {Object.entries(coinglassSettings).map(([section, enabled]) => (
-              <label key={section} className="coinglass-setting">
+            <div className="control-list">
+              <label className="control-row">
                 <input
-                  className="control-checkbox"
+                  className="toggle toggle-sm"
                   type="checkbox"
-                  checked={enabled}
-                  onChange={(event) => void handleCoinglassSettingChange(section as CoinglassSection, event.target.checked)}
+                  checked={includeScrapedData}
+                  onChange={(event) => void handleIncludeScrapedDataChange(event.target.checked)}
                 />
-                {formatCoinglassSection(section as CoinglassSection)}
+                <span className="control-row__body">
+                  <span className="control-row__title control-row__title--logo">
+                    <img className="service-logo-image service-logo-image--backplate" src={SOURCE_LOGOS.tradingView} alt="" aria-hidden="true" />
+                    TradingView context
+                  </span>
+                </span>
               </label>
-            ))}
-          </div>
-          <div className="coinglass-screenshots">
-            <label className="coinglass-setting">
-              <input
-                className="control-checkbox"
-                type="checkbox"
-                checked={coinglassScreenshotSettings.liquidationHeatmap}
-                onChange={(event) => void handleCoinglassScreenshotSettingChange('liquidationHeatmap', event.target.checked)}
-              />
-              Liquidation heatmap screenshots
-            </label>
-            <label className="coinglass-setting">
-              <input
-                className="control-checkbox"
-                type="checkbox"
-                checked={coinglassScreenshotSettings.liquidationMap}
-                onChange={(event) => void handleCoinglassScreenshotSettingChange('liquidationMap', event.target.checked)}
-              />
-              Liquidation map screenshots
-            </label>
-            <div className="coinglass-timeframes">
-              {(['24h', '7d', '12h'] as CoinglassHeatmapTimeframe[]).map((timeframe) => (
-                <label key={timeframe} className="coinglass-chip">
-                  <input
-                    className="control-checkbox"
-                    type="checkbox"
-                    checked={coinglassScreenshotSettings.heatmapTimeframes[timeframe]}
-                    onChange={(event) => void handleCoinglassHeatmapTimeframeChange(timeframe, event.target.checked)}
-                  />
-                  {timeframe}
-                </label>
-              ))}
+              <label className="control-row">
+                <input
+                  className="toggle toggle-sm"
+                  type="checkbox"
+                  checked={includeCoinglassData}
+                  onChange={(event) => void handleIncludeCoinglassDataChange(event.target.checked)}
+                />
+                <span className="control-row__body">
+                  <span className="control-row__title control-row__title--logo">
+                    <img className="service-logo-image" src={SOURCE_LOGOS.coinglass} alt="" aria-hidden="true" />
+                    Coinglass market data
+                  </span>
+                </span>
+              </label>
             </div>
-          </div>
-          <div className="coinglass-preview__actions">
+          </section>
+
+          <section className="config-section">
+            <div className="section-heading section-heading--status">
+              <div>
+                <h2 className="section-heading__title">Coinglass capture</h2>
+              </div>
+              {coinglassState !== 'idle' && (
+                <span className="section-status" title={coinglassMessage || coinglassState}>
+                  <span className={`status status-sm ${coinglassState === 'success' ? 'status-success' : coinglassState === 'error' ? 'status-error' : 'status-warning'}`} />
+                </span>
+              )}
+            </div>
+
+            <fieldset className="choice-fieldset">
+              <legend className="choice-fieldset__label">Symbols</legend>
+              <div className="symbol-options">
+                {(['BTC', 'ETH', 'SOL'] as CoinglassSymbol[]).map((symbol) => (
+                  <label key={symbol} className="symbol-option">
+                    <input
+                      className="checkbox checkbox-sm"
+                      type="checkbox"
+                      checked={manualCoinglassSymbols.includes(symbol)}
+                      onChange={(event) => void handleManualCoinglassSymbolChange(symbol, event.target.checked)}
+                    />
+                    <span>{symbol}</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+
+            <div className="control-list control-list--capture">
+              <label className="control-row">
+                <input
+                  className="toggle toggle-sm"
+                  type="checkbox"
+                  checked={coinglassMarketDataEnabled}
+                  onChange={(event) => void handleCoinglassMarketDataChange(event.target.checked)}
+                />
+                <span className="control-row__body">
+                  <span className="control-row__title">Market data</span>
+                </span>
+              </label>
+              <label className="control-row">
+                <input
+                  className="toggle toggle-sm"
+                  type="checkbox"
+                  checked={coinglassHeatmapsEnabled}
+                  onChange={(event) => void handleCoinglassHeatmapsChange(event.target.checked)}
+                />
+                <span className="control-row__body">
+                  <span className="control-row__title">Liquidation charts</span>
+                </span>
+              </label>
+            </div>
+
+            <details className="collapse collapse-arrow advanced-options">
+              <summary className="collapse-title">Advanced capture options</summary>
+              <div className="collapse-content advanced-options__content">
+                <div className="advanced-options__group">
+                  <div className="advanced-options__label">Market data</div>
+                  {Object.entries(coinglassSettings).map(([section, enabled]) => (
+                    <label key={section} className="compact-control-row">
+                      <input
+                        className="toggle toggle-xs"
+                        type="checkbox"
+                        checked={enabled}
+                        onChange={(event) => void handleCoinglassSettingChange(section as CoinglassSection, event.target.checked)}
+                      />
+                      <span>{formatCoinglassSection(section as CoinglassSection)}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="advanced-options__group">
+                  <div className="advanced-options__label">Screenshots</div>
+                  <label className="compact-control-row">
+                    <input
+                      className="toggle toggle-xs"
+                      type="checkbox"
+                      checked={coinglassScreenshotSettings.liquidationHeatmap}
+                      onChange={(event) => void handleCoinglassScreenshotSettingChange('liquidationHeatmap', event.target.checked)}
+                    />
+                    <span>Liquidation heatmap</span>
+                  </label>
+                  <label className="compact-control-row">
+                    <input
+                      className="toggle toggle-xs"
+                      type="checkbox"
+                      checked={coinglassScreenshotSettings.liquidationMap}
+                      onChange={(event) => void handleCoinglassScreenshotSettingChange('liquidationMap', event.target.checked)}
+                    />
+                    <span>Liquidation map</span>
+                  </label>
+                </div>
+                <fieldset className="choice-fieldset choice-fieldset--compact">
+                  <legend className="choice-fieldset__label">Heatmap timeframes</legend>
+                  <div className="timeframe-options">
+                    {(['24h', '7d', '12h'] as CoinglassHeatmapTimeframe[]).map((timeframe) => (
+                      <label key={timeframe} className="timeframe-option">
+                        <input
+                          className="checkbox checkbox-xs"
+                          type="checkbox"
+                          checked={coinglassScreenshotSettings.heatmapTimeframes[timeframe]}
+                          onChange={(event) => void handleCoinglassHeatmapTimeframeChange(timeframe, event.target.checked)}
+                        />
+                        <span>{timeframe}</span>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+              </div>
+            </details>
+
             <button
-              className="coinglass-preview__button"
+              className="btn btn-primary btn-block scrape-button"
               type="button"
               disabled={coinglassState === 'scraping' || isSubmitting}
               onClick={() => void handleScrapeCoinglass()}
             >
-              {coinglassState === 'scraping' ? 'Scraping...' : 'Scrape Coinglass'}
+              {coinglassState === 'scraping' ? 'Wait Coinglass...' : 'Get Coinglass'}
             </button>
             {coinglassMessage && (
-              <span className={`coinglass-preview__message coinglass-preview__message--${coinglassState}`}>
-                {coinglassMessage}
-              </span>
+              <div className={`capture-message capture-message--${coinglassState}`}>
+                <span className="capture-message__icon" aria-hidden="true">
+                  {coinglassState === 'error' ? 'x' : '✓'}
+                </span>
+                <span>{coinglassMessage}</span>
+              </div>
             )}
-          </div>
-          <CoinglassSnapshotPreview snapshot={coinglassSnapshot} />
-        </div>
-        <label className="field-label field-label--prompt">Additional prompt</label>
-        <textarea
-          className="prompt-input"
-          value={additionalPrompt}
-          onChange={(event) => void handleAdditionalPromptChange(event.target.value)}
-          placeholder="Any special context for this analysis..."
-        />
-      </div>
+          </section>
 
-      <div className="action-bar">
+          <section className="config-section prompt-section">
+            <label className="field-label field-label--prompt" htmlFor="additional-prompt">Additional prompt</label>
+            <textarea
+              id="additional-prompt"
+              className="textarea prompt-input"
+              value={additionalPrompt}
+              onChange={(event) => void handleAdditionalPromptChange(event.target.value)}
+              placeholder="Add context for this analysis..."
+            />
+          </section>
+
+        </main>
+      ) : (
+        <main className="timeline-view">
+          <ol className="activity-feed">
+            <li className="activity-item">
+              <span className="activity-item__marker" />
+              <article className="card card-border timeline-card">
+                <div className="card-body">
+                <div className="timeline-card__title">Screens</div>
+                {!hasVisibleScreenshots ? (
+                  <div className="empty-state">
+                    No screenshots yet.<br />Go to TradingView and press Shift+Ctrl+S on Windows or Shift+Cmd+S on Mac.
+                  </div>
+                ) : (
+                  <>
+                    {Object.entries(groupedScreenshots).map(([symbol, group]) => (
+                      <div key={symbol} className="screenshot-group">
+                        <h3 className="screenshot-group__title">{symbol}</h3>
+                        <div className="screenshot-grid">
+                          {group.map((screenshot) => (
+                            <div key={screenshot.key} className="screenshot-card">
+                              <div className="screenshot-card__header">
+                                <span>{screenshot.timeframe}</span>
+                                <button
+                                  className="btn btn-error btn-ghost btn-xs btn-square remove-button"
+                                  type="button"
+                                  aria-label={`Remove ${screenshot.symbol} ${screenshot.timeframe}`}
+                                  title="Remove"
+                                  onClick={() => handleRemoveScreenshot(screenshot.key)}
+                                >
+                                  &times;
+                                </button>
+                              </div>
+                              {previewUrls[screenshot.key] ? (
+                                <a href={previewUrls[screenshot.key]} target="_blank" rel="noreferrer">
+                                  <img className="screenshot-card__image" src={previewUrls[screenshot.key]} alt={`${screenshot.symbol} ${screenshot.timeframe}`} />
+                                </a>
+                              ) : (
+                                <div className="screenshot-card__placeholder" />
+                              )}
+                              <div className="screenshot-card__time">{formatEuTime(screenshot.capturedAt)}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                    {coinglassImageScreenshots.length > 0 && (
+                      <div className="screenshot-group">
+                        <h3 className="screenshot-group__title">COINGLASS</h3>
+                        <div className="screenshot-grid">
+                          {coinglassImageScreenshots.map((screenshot) => (
+                            <div key={screenshot.id} className="screenshot-card screenshot-card--coinglass">
+                              <div className="screenshot-card__header">
+                                <span>{screenshot.symbol} {screenshot.timeframe}</span>
+                                <span className="screenshot-card__kind">{formatCoinglassScreenshotKind(screenshot.kind)}</span>
+                              </div>
+                              <a href={screenshot.dataUrl} target="_blank" rel="noreferrer">
+                                <img className="screenshot-card__image" src={screenshot.dataUrl} alt={`${screenshot.symbol} ${screenshot.timeframe} ${screenshot.title}`} />
+                              </a>
+                              <div className="screenshot-card__time">{screenshot.title}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+                </div>
+              </article>
+            </li>
+            <li className="activity-item">
+              <span className="activity-item__marker" />
+              <article className="card card-border timeline-card timeline-card--telemetry">
+                <div className="card-body">
+                <div className="timeline-card__title timeline-card__title--logo">
+                  <img className="service-logo-image service-logo-image--backplate timeline-logo-image" src={SOURCE_LOGOS.tradingView} alt="" aria-hidden="true" />
+                  TradingView CTX
+                </div>
+                <TelemetryStatusList
+                  screenshots={tradingViewScreenshots}
+                  integrity={telemetryIntegrity}
+                  manualPreview={manualTelemetryPreview}
+                />
+                </div>
+              </article>
+            </li>
+            <li className="activity-item">
+              <span className={`activity-item__marker${coinglassSnapshot?.status === 'error' ? ' activity-item__marker--error' : ''}`} />
+              <article className="card card-border timeline-card">
+                <div className="card-body">
+                <div className="timeline-card__title timeline-card__title--logo">
+                  <img className="service-logo-image timeline-logo-image" src={SOURCE_LOGOS.coinglass} alt="" aria-hidden="true" />
+                  Coinglass
+                </div>
+                <CoinglassSnapshotPreview snapshot={coinglassSnapshot} />
+                </div>
+              </article>
+            </li>
+          </ol>
+        </main>
+      )}
+
+      <section className="config-section action-panel">
         <button
-          className="action-button action-button--submit"
+          className="btn btn-primary btn-block action-button--submit"
           disabled={dispatchTargets.length === 0 || isSubmitting || (screenshots.length === 0 && !canDispatchCoinglass)}
           onClick={() => void handlePrepareChats()}
         >
           {isSubmitting ? 'Preparing...' : 'Submit'}
         </button>
-        <label className="option-row option-row--nowrap">
+        <label className="autosubmit-control">
+          <span className="autosubmit-control__label">Autosubmit</span>
           <input
-            className="control-checkbox"
+            className="toggle toggle-sm"
             type="checkbox"
             checked={autosubmit}
             onChange={(event) => void handleAutosubmitChange(event.target.checked)}
           />
-          Autosubmit
         </label>
-        <button
-          className="action-button"
-          disabled={!hasVisibleScreenshots}
-          onClick={() => void handleClearAnalysis()}
-        >
-          Clear analysis
-        </button>
-        <button
-          className="action-button action-button--settings"
-          onClick={() => setIsSettingsOpen(true)}
-        >
-          Settings ⚙️
-        </button>
-      </div>
-
-      <SessionStatusBlock now={now} />
+        <div className="action-clear-row">
+          <button
+            className="btn btn-error btn-soft btn-sm action-clear action-clear--config"
+            disabled={!hasVisibleScreenshots}
+            onClick={() => void handleClearAnalysis()}
+          >
+            Clear
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -762,31 +911,33 @@ function CoinglassSnapshotPreview({ snapshot }: { snapshot: CoinglassSnapshot | 
   }
 
   return (
-    <details className="coinglass-result" open>
-      <summary className="coinglass-result__summary">
+    <details className="collapse collapse-arrow coinglass-result">
+      <summary className="collapse-title coinglass-result__summary">
         <span>
           {snapshot.symbols.join(', ')} · {snapshot.sections.length} section(s)
           {(snapshot.screenshots?.length ?? 0) > 0 ? ` · ${snapshot.screenshots?.length} image(s)` : ''}
         </span>
-        <span className={`coinglass-result__status coinglass-result__status--${snapshot.status}`}>
+        <span className={`badge badge-sm ${coinglassStatusClass(snapshot.status)} coinglass-result__status coinglass-result__status--${snapshot.status}`}>
           {snapshot.status}
         </span>
       </summary>
-      <div className="coinglass-result__meta">
-        Captured {new Date(snapshot.capturedAt).toLocaleTimeString()}
-        {(snapshot.screenshots?.length ?? 0) > 0 ? ` · ${snapshot.screenshots?.length} image(s)` : ''}
+      <div className="collapse-content coinglass-result__body">
+        <div className="coinglass-result__meta">
+          Captured {formatEuTime(snapshot.capturedAt)}
+          {(snapshot.screenshots?.length ?? 0) > 0 ? ` · ${snapshot.screenshots?.length} image(s)` : ''}
+        </div>
+        {snapshot.warnings.length > 0 && (
+          <div className="coinglass-result__warning">
+            {snapshot.warnings.join('; ')}
+          </div>
+        )}
+        {snapshot.errors.length > 0 && (
+          <div className="coinglass-result__error">
+            {snapshot.errors.join('; ')}
+          </div>
+        )}
+        <pre className="coinglass-result__json">{JSON.stringify(snapshot.data, null, 2)}</pre>
       </div>
-      {snapshot.warnings.length > 0 && (
-        <div className="coinglass-result__warning">
-          {snapshot.warnings.join('; ')}
-        </div>
-      )}
-      {snapshot.errors.length > 0 && (
-        <div className="coinglass-result__error">
-          {snapshot.errors.join('; ')}
-        </div>
-      )}
-      <pre className="coinglass-result__json">{JSON.stringify(snapshot.data, null, 2)}</pre>
     </details>
   );
 }
@@ -812,19 +963,23 @@ function TelemetryStatusList({
 
   return (
     <div className="telemetry-list">
-      {generalTelemetry && (
-        <details className="telemetry-row telemetry-row--general" open>
-          <summary className="telemetry-row__summary">
-            <span className="telemetry-row__chart">General data</span>
-            <span className="telemetry-row__status telemetry-row__status--scraped">
-              {generalTelemetry.metricCount}
-            </span>
-          </summary>
-          <div className="telemetry-row__body">
+      <details className={`collapse collapse-arrow telemetry-row telemetry-row--general${generalTelemetry ? '' : ' telemetry-row--missing'}`}>
+        <summary className="collapse-title telemetry-row__summary">
+          <span className="telemetry-row__chart">General data</span>
+          <span
+            className={`telemetry-status-icon ${generalTelemetry ? 'telemetry-status-icon--success' : 'telemetry-status-icon--error'}`}
+            aria-label={generalTelemetry ? 'General data available' : 'General data missing'}
+            title={generalTelemetry ? 'General data available' : 'General data missing'}
+          />
+        </summary>
+        <div className="collapse-content telemetry-row__body">
+          {generalTelemetry ? (
             <TelemetryMetricTable telemetry={generalTelemetry.telemetry} scopes={['shared']} />
-          </div>
-        </details>
-      )}
+          ) : (
+            <div className="telemetry-row__reason">No shared TradingView CTX general data captured.</div>
+          )}
+        </div>
+      </details>
 
       {screenshots.map((screenshot) => {
         const result = integrity.get(screenshot.key) ?? {
@@ -837,18 +992,20 @@ function TelemetryStatusList({
         const currency = telemetry?.quoteCurrency || quoteCurrencyFromSymbol(screenshot.normalizedSymbol || screenshot.symbol);
 
         return (
-          <details key={screenshot.key} className="telemetry-row" open>
-            <summary className="telemetry-row__summary">
+          <details key={screenshot.key} className="collapse collapse-arrow telemetry-row">
+            <summary className="collapse-title telemetry-row__summary">
               <span className="telemetry-row__chart">
                 {screenshot.normalizedSymbol || screenshot.symbol} · {screenshot.timeframe} · {currency}
               </span>
-              <span className={`telemetry-row__status telemetry-row__status--${result.status}`}>
-                {telemetryStatusLabel(result)}
-              </span>
+              <span
+                className={`telemetry-status-icon ${isSuccessfulTelemetryStatus(result.status) ? 'telemetry-status-icon--success' : 'telemetry-status-icon--error'}`}
+                aria-label={telemetryStatusLabel(result)}
+                title={telemetryStatusLabel(result)}
+              />
             </summary>
-            <div className="telemetry-row__body">
+            <div className="collapse-content telemetry-row__body">
               <div className="telemetry-row__meta">
-                {result.metricCount} metric(s) · captured {new Date(screenshot.capturedAt).toLocaleTimeString()}
+                {result.metricCount} metric(s) · captured {formatEuTime(screenshot.capturedAt)}
               </div>
               {result.reason && (
                 <div className={`telemetry-row__reason${result.status === 'partial' ? ' telemetry-row__reason--warning' : ''}`}>
@@ -862,16 +1019,18 @@ function TelemetryStatusList({
       })}
 
       {manualPreview && (
-        <details className="telemetry-row telemetry-row--manual" open>
-          <summary className="telemetry-row__summary">
+        <details className="collapse collapse-arrow telemetry-row telemetry-row--manual">
+          <summary className="collapse-title telemetry-row__summary">
             <span className="telemetry-row__chart">
               Live · {manualPreview.symbol} · {manualPreview.timeframe}
             </span>
-            <span className={`telemetry-row__status telemetry-row__status--${manualPreview.valid ? manualPreview.quality === 'partial' ? 'partial' : 'scraped' : 'invalid'}`}>
-              {manualPreview.valid ? manualPreview.quality === 'partial' ? 'Partial' : 'Scraped' : 'Invalid'}
-            </span>
+            <span
+              className={`telemetry-status-icon ${manualPreview.valid ? 'telemetry-status-icon--success' : 'telemetry-status-icon--error'}`}
+              aria-label={manualPreview.valid ? manualPreview.quality === 'partial' ? 'Partial' : 'Scraped' : 'Invalid'}
+              title={manualPreview.valid ? manualPreview.quality === 'partial' ? 'Partial' : 'Scraped' : 'Invalid'}
+            />
           </summary>
-          <div className="telemetry-row__body">
+          <div className="collapse-content telemetry-row__body">
             <div className="telemetry-row__meta">
               {Object.keys(manualPreview.metrics).length} metric(s) · live preview only
             </div>
@@ -905,17 +1064,13 @@ function TelemetryMetricTable({
   return (
     <div className="telemetry-metrics">
       {sections.map((section) => (
-        <details key={section.scope} className="telemetry-metric-scope" open>
-          <summary className="telemetry-metric-scope__summary">
-            <span>{section.scope === 'chart' ? 'Exact chart data' : 'General context'}</span>
-            <span>{section.groups.reduce((total, group) => total + group.metrics.length, 0)}</span>
-          </summary>
+        <div key={section.scope} className="telemetry-metric-section">
           {section.groups.map((group) => (
-            <details key={group.name} className="telemetry-metric-group" open>
-              <summary className="telemetry-metric-group__summary">
+            <div key={group.name} className="telemetry-metric-group">
+              <div className="telemetry-metric-group__header">
                 <span>{formatTelemetryGroupName(group.name)}</span>
-                <span>{group.metrics.length}</span>
-              </summary>
+                <span className="badge badge-sm badge-neutral">{group.metrics.length}</span>
+              </div>
               <div className="telemetry-metric-table">
                 {group.metrics.map((metric) => (
                   <div key={metric.label} className="telemetry-metric-row">
@@ -924,9 +1079,9 @@ function TelemetryMetricTable({
                   </div>
                 ))}
               </div>
-            </details>
+            </div>
           ))}
-        </details>
+        </div>
       ))}
     </div>
   );
@@ -1040,17 +1195,28 @@ function telemetryStatusLabel(result: TelemetryIntegrityResult): string {
   return 'Rejected';
 }
 
+function isSuccessfulTelemetryStatus(status: TelemetryIntegrityResult['status']): boolean {
+  return status === 'scraped' || status === 'partial';
+}
+
+function telemetryBadgeClass(status: TelemetryIntegrityResult['status'] | 'scraped'): string {
+  if (status === 'scraped') return 'badge-success';
+  if (status === 'partial') return 'badge-warning';
+  if (status === 'invalid' || status === 'rejected') return 'badge-error';
+  return 'badge-neutral';
+}
+
+function coinglassStatusClass(status: CoinglassSnapshot['status']): string {
+  if (status === 'success') return 'badge-success';
+  if (status === 'partial' || status === 'scraping') return 'badge-warning';
+  if (status === 'error') return 'badge-error';
+  return 'badge-neutral';
+}
+
 function quoteCurrencyFromSymbol(symbol: string): string {
   if (/USDT/i.test(symbol)) return 'USDT';
   if (/USD/i.test(symbol)) return 'USD';
   return 'unknown';
-}
-
-function symbolsFromScreenshots(screenshots: ScreenshotMeta[]): CoinglassSymbol[] {
-  const symbols = screenshots
-    .map((screenshot) => coinglassSymbolFromText(screenshot.normalizedSymbol || screenshot.symbol))
-    .filter((symbol): symbol is CoinglassSymbol => Boolean(symbol));
-  return [...new Set(symbols)];
 }
 
 function normalizeCoinglassSymbols(value: unknown): CoinglassSymbol[] {
@@ -1153,6 +1319,15 @@ function normalizeTimeframeToken(value: string): string {
   return `${amount}${unit.toUpperCase()}`;
 }
 
+function formatEuTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+}
+
 function SessionStatusBlock({ now }: { now: Date }): JSX.Element {
   const sessions = marketSessionStatuses(now);
   const activeSessions = sessions.filter((session) => session.active);
@@ -1165,6 +1340,10 @@ function SessionStatusBlock({ now }: { now: Date }): JSX.Element {
       </div>
       <div className="sessions-panel__active">
         Active: {activeSessions.length > 0 ? activeSessions.map((session) => session.name).join(', ') : 'none'}
+      </div>
+      <div className="candle-close">
+        <span className="candle-close__label">4H candle closes in</span>
+        <span className="candle-close__time">{formatDuration(nextFourHourClose.getTime() - now.getTime(), true)}</span>
       </div>
       <div className="session-grid">
         {sessions.map((session) => (
@@ -1179,15 +1358,27 @@ function SessionStatusBlock({ now }: { now: Date }): JSX.Element {
           </div>
         ))}
       </div>
-      <div className="candle-close">
-        4H candle closes in <span className="candle-close__time">{formatDuration(nextFourHourClose.getTime() - now.getTime(), true)}</span>
-      </div>
     </div>
   );
 }
 
 function sortScreenshots(screenshots: ScreenshotMeta[]): ScreenshotMeta[] {
   return [...screenshots].sort((a, b) => a.capturedAt - b.capturedAt);
+}
+
+function sameScreenshots(a: ScreenshotMeta[], b: ScreenshotMeta[]): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((item, index) => {
+    const other = b[index];
+    if (!other) return false;
+    return (
+      item.key === other.key &&
+      item.blobId === other.blobId &&
+      item.capturedAt === other.capturedAt &&
+      item.hash === other.hash &&
+      item.tradingViewTelemetry?.capturedAt === other.tradingViewTelemetry?.capturedAt
+    );
+  });
 }
 
 function groupBySymbol(screenshots: ScreenshotMeta[]): Record<string, ScreenshotMeta[]> {
@@ -1217,21 +1408,4 @@ function timeframeRank(timeframe: string): number {
   const unit = match[2];
   const unitMinutes: Record<string, number> = { m: 1, H: 60, D: 1440, W: 10080, M: 43200 };
   return amount * (unit ? unitMinutes[unit] ?? 0 : 0);
-}
-
-function getStatusClass(status: TargetStatus['state'] | undefined): string {
-  if (status === 'ready' || status === 'submitted' || status === 'finished') return 'target-status--success';
-  if (status === 'error') return 'target-status--error';
-  if (status) return 'target-status--working';
-  return 'target-status--idle';
-}
-
-function getStatusText(status: TargetStatus | undefined): string {
-  if (!status) return 'Pending';
-  if (status.state === 'ready') return '✓ Ready — send manually';
-  if (status.state === 'submitted') return '✓ Submitted';
-  if (status.state === 'working') return 'Working…';
-  if (status.state === 'finished') return '✓ Finished';
-  if (status.state === 'error') return `✗ ${status.message ?? 'Error'}`;
-  return status.message ?? status.state.replaceAll('_', ' ');
 }

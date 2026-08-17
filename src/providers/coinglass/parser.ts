@@ -11,6 +11,11 @@ import type {
 const EXCHANGES = ['binance', 'bybit', 'okx', 'cme'] as const;
 const LIQUIDATION_PERIODS = ['1h', '4h', '12h', '24h'] as const;
 const TRACKED_SPOT_NETFLOW_SYMBOLS: CoinglassSymbol[] = ['BTC', 'ETH', 'SOL'];
+type ParsedScalar = string | number | boolean;
+type ParsedValue = ParsedScalar | ParsedRecord | ParsedRecord[] | string[];
+interface ParsedRecord {
+  [key: string]: ParsedValue;
+}
 
 export function parseCoinglassPage(
   document: Document,
@@ -21,15 +26,15 @@ export function parseCoinglassPage(
     throw new Error('Coinglass challenge or protection page is visible; solve it in the opened tab and retry');
   }
 
-  if (section === 'openInterest') return parseOpenInterest(document, symbol);
-  if (section === 'fundingRateSymbol') return parseFundingRateSymbol(document, symbol);
-  if (section === 'liquidationsTotals') return parseLiquidationsTotals(document, symbol);
-  if (section === 'fundingRate') return parseFundingRateOverview(document, symbol);
-  if (section === 'longShortRatio') return parseLongShortRatio(document);
-  if (section === 'basis') return parseBasis(document, symbol);
-  if (section === 'etf') return parseEtf(document, symbol);
-  if (section === 'spotInflowOutflow') return parseSpotInflowOutflow(document, symbol);
-  return parseGenericPage(document, symbol);
+  if (section === 'openInterest') return withoutNullish(parseOpenInterest(document, symbol));
+  if (section === 'fundingRateSymbol') return withoutNullish(parseFundingRateSymbol(document, symbol));
+  if (section === 'liquidationsTotals') return withoutNullish(parseLiquidationsTotals(document, symbol));
+  if (section === 'fundingRate') return withoutNullish(parseFundingRateOverview(document, symbol));
+  if (section === 'longShortRatio') return withoutNullish(parseLongShortRatio(document));
+  if (section === 'basis') return withoutNullish(parseBasis(document, symbol));
+  if (section === 'etf') return withoutNullish(parseEtf(document, symbol));
+  if (section === 'spotInflowOutflow') return withoutNullish(parseSpotInflowOutflow(document, symbol));
+  return withoutNullish(parseGenericPage(document, symbol));
 }
 
 export function parseGenericPage(document: Document, symbol?: CoinglassSymbol): CoinglassGenericPage {
@@ -56,15 +61,15 @@ export function parseOpenInterest(document: Document, symbol: CoinglassSymbol): 
   const exchanges = pickOpenInterestExchangeRows(tables);
   const majorExchangesOiUsd = sumValues(Object.values(exchanges).map((exchange) => exchange.oiUsd));
 
-  return {
+  return compactRecord({
     oiUsd: money[1] ?? money[0] ?? values.find((value) => Math.abs(value) > 1_000_000) ?? majorExchangesOiUsd,
-    change1hPct: percentages[0] ?? null,
-    change4hPct: percentages[1] ?? null,
-    change24hPct: percentages[2] ?? null,
-    oi24hVol: money[2] ?? null,
+    change1hPct: percentages[0],
+    change4hPct: percentages[1],
+    change24hPct: percentages[2],
+    oi24hVol: money[2],
     exchanges,
     rawRow: rowTexts,
-  };
+  }) as unknown as CoinglassOpenInterest;
 }
 
 export function parseFundingRateSymbol(document: Document, symbol: CoinglassSymbol): CoinglassFundingRateSymbol {
@@ -75,16 +80,16 @@ export function parseFundingRateSymbol(document: Document, symbol: CoinglassSymb
   const lowestKey = findKey(cards, ['lowest funding']);
   const exchangeRows = pickExchangeRows(extractTables(document));
 
-  return {
-    average: averageKey ? firstPercent(cards[averageKey] ?? '') : null,
-    spread: spreadKey ? firstPercent(cards[spreadKey] ?? '') : null,
+  return compactRecord({
+    average: averageKey ? firstPercent(cards[averageKey] ?? '') : undefined,
+    spread: spreadKey ? firstPercent(cards[spreadKey] ?? '') : undefined,
     highest: highestKey ? cards[highestKey] : undefined,
     lowest: lowestKey ? cards[lowestKey] : undefined,
     binance: exchangeFunding(exchangeRows.binance),
     bybit: exchangeFunding(exchangeRows.bybit),
     okx: exchangeFunding(exchangeRows.okx),
     rawCards: cards,
-  };
+  }) as unknown as CoinglassFundingRateSymbol;
 }
 
 export function parseLiquidationsTotals(document: Document, symbol: CoinglassSymbol): CoinglassLiquidationsTotals {
@@ -94,10 +99,10 @@ export function parseLiquidationsTotals(document: Document, symbol: CoinglassSym
     .slice(4)
     .flatMap((value) => extractNumbers(value.replace(/[$,%]/g, '')));
   const output: CoinglassLiquidationsTotals = {
-    '1h': { long: candidates[0] ?? null, short: candidates[1] ?? null },
-    '4h': { long: candidates[2] ?? null, short: candidates[3] ?? null },
-    '12h': { long: candidates[4] ?? null, short: candidates[5] ?? null },
-    '24h': { long: candidates[6] ?? null, short: candidates[7] ?? null },
+    '1h': compactRecord({ long: candidates[0], short: candidates[1] }) as CoinglassLiquidationsTotals['1h'],
+    '4h': compactRecord({ long: candidates[2], short: candidates[3] }) as CoinglassLiquidationsTotals['4h'],
+    '12h': compactRecord({ long: candidates[4], short: candidates[5] }) as CoinglassLiquidationsTotals['12h'],
+    '24h': compactRecord({ long: candidates[6], short: candidates[7] }) as CoinglassLiquidationsTotals['24h'],
     rawRow: rowTexts,
   };
   return output;
@@ -106,21 +111,21 @@ export function parseLiquidationsTotals(document: Document, symbol: CoinglassSym
 export function parseLongShortRatio(document: Document): CoinglassLongShortRatio {
   const selected = selectedTabText(document, ['1 hour', '4 hour', '12 hour', '24 hour']);
   const timeframe = normalizePeriod(selected) ?? '4h';
-  const bodyText = text(document.body);
+  const bodyText = documentText(document);
   const longMatch = bodyText.match(/(\d+H|\d+\s*hour)\s+Long Volume\s*\$?\s*([0-9.,]+[KMBT]?)/i);
   const shortMatch = bodyText.match(/(\d+H|\d+\s*hour)\s+Short Volume\s*\$?\s*([0-9.,]+[KMBT]?)/i);
   const cards = extractCards(document);
   const longCard = Object.entries(cards).find(([key]) => key.toLowerCase().includes('long volume'));
   const shortCard = Object.entries(cards).find(([key]) => key.toLowerCase().includes('short volume'));
 
-  return {
+  return compactRecord({
     timeframe,
-    longVolume: longMatch?.[2] ? parseNumber(longMatch[2]) : longCard ? firstNumericValue(longCard[1]) : null,
-    shortVolume: shortMatch?.[2] ? parseNumber(shortMatch[2]) : shortCard ? firstNumericValue(shortCard[1]) : null,
+    longVolume: longMatch?.[2] ? parseNumber(longMatch[2]) : longCard ? firstNumericValue(longCard[1]) : undefined,
+    shortVolume: shortMatch?.[2] ? parseNumber(shortMatch[2]) : shortCard ? firstNumericValue(shortCard[1]) : undefined,
     longPct: firstPercentNear(bodyText, 'Long Volume'),
     shortPct: secondPercentNear(bodyText, 'Short Volume') ?? complementPercent(firstPercentNear(bodyText, 'Long Volume')),
     exchanges: pickLongShortExchangeRows(extractTables(document)),
-  };
+  }) as unknown as CoinglassLongShortRatio;
 }
 
 export function parseFundingRateOverview(document: Document, symbol: CoinglassSymbol): unknown {
@@ -128,19 +133,21 @@ export function parseFundingRateOverview(document: Document, symbol: CoinglassSy
   const row = findRow(document, symbol);
   const cells = row ? cellTexts(row) : [];
   const rates = cells.slice(1).map(firstPercent);
-  return {
+  const volumeWeighted = firstPercent(cards[`${symbol} Volume-Weighted Funding Rate`] ?? '');
+  const exchangeRates = rates.filter((rate): rate is number => rate !== null);
+  return compactRecord({
     title: text(document.querySelector('h1')) || 'Funding rates',
     symbol,
-    oiWeighted: firstPercent(cards[`${symbol} OI-Weighted Funding Rate`] ?? '') ?? null,
-    volumeWeighted: firstPercent(cards[`${symbol} Volume-Weighted Funding Rate`] ?? '') ?? null,
+    oiWeighted: firstPercent(cards[`${symbol} OI-Weighted Funding Rate`] ?? '') ?? volumeWeighted ?? average(exchangeRates),
+    volumeWeighted,
     exchanges: {
-      binance: { rate: rates[0] ?? null },
-      okx: { rate: rates[1] ?? null },
-      bybit: { rate: rates[2] ?? null },
+      binance: compactRecord({ rate: rates[0] }),
+      okx: compactRecord({ rate: rates[1] }),
+      bybit: compactRecord({ rate: rates[2] }),
     },
     highest: splitRankedFunding(cards['Highest Funding Rate'] ?? ''),
     lowest: splitRankedFunding(cards['Lowest Funding Rate'] ?? ''),
-  };
+  });
 }
 
 export function parseBasis(document: Document, symbol: CoinglassSymbol): unknown {
@@ -182,7 +189,7 @@ export function parseSpotInflowOutflow(document: Document, symbol: CoinglassSymb
 }
 
 export function isChallengePage(document: Document): boolean {
-  const content = `${document.title} ${text(document.body)}`.toLowerCase();
+  const content = `${document.title} ${documentText(document)}`.toLowerCase();
   return content.includes('checking your browser')
     || content.includes('ddos')
     || content.includes('cloudflare')
@@ -193,7 +200,7 @@ export function isChallengePage(document: Document): boolean {
 function assertSpotInflowOutflowPage(document: Document): void {
   const heading = text(document.querySelector('h1, h2')).toLowerCase();
   const title = document.title.toLowerCase();
-  const content = `${document.title} ${text(document.body)}`.toLowerCase();
+  const content = `${document.title} ${documentText(document)}`.toLowerCase();
 
   if (title.includes('donations') || heading.includes('donations')) {
     throw new Error('Coinglass spot inflow/outflow URL redirected to Donations page');
@@ -278,8 +285,8 @@ function extractCards(document: Document): Record<string, string> {
   return cards;
 }
 
-function pickExchangeRows(tables: Array<{ rows: Array<Record<string, string>> }>): Record<string, Record<string, string | number | null>> {
-  const result: Record<string, Record<string, string | number | null>> = {};
+function pickExchangeRows(tables: Array<{ rows: Array<Record<string, string>> }>): Record<string, Record<string, string | number>> {
+  const result: Record<string, Record<string, string | number>> = {};
   for (const exchange of EXCHANGES) {
     const row = tables.flatMap((table) => table.rows).find((candidate) => {
       return Object.values(candidate).some((value) => value.toLowerCase().includes(exchange));
@@ -289,11 +296,11 @@ function pickExchangeRows(tables: Array<{ rows: Array<Record<string, string>> }>
   return result;
 }
 
-function pickOpenInterestExchangeRows(tables: Array<{ rows: Array<Record<string, string>> }>): Record<string, Record<string, string | number | null>> {
-  const result: Record<string, Record<string, string | number | null>> = {};
+function pickOpenInterestExchangeRows(tables: Array<{ rows: Array<Record<string, string>> }>): Record<string, Record<string, string | number>> {
+  const result: Record<string, Record<string, string | number>> = {};
   for (const exchange of EXCHANGES) {
     const cells = findExchangeCells(tables, exchange);
-    result[exchange] = cells.length > 0 ? {
+    result[exchange] = cells.length > 0 ? compactRecord({
       rank: parseNumber(cells[0] ?? ''),
       exchange: cells[1] ?? exchange,
       oiCoin: parseNumber(cells[2] ?? ''),
@@ -303,36 +310,36 @@ function pickOpenInterestExchangeRows(tables: Array<{ rows: Array<Record<string,
       change4hPct: firstPercent(cells[6] ?? ''),
       change24hPct: firstPercent(cells[7] ?? ''),
       longShortRatio: parseNumber(cells[8] ?? ''),
-    } : {};
+    }) as Record<string, string | number> : {};
   }
   return result;
 }
 
-function pickLongShortExchangeRows(tables: Array<{ rows: Array<Record<string, string>> }>): Record<string, Record<string, string | number | null>> {
-  const result: Record<string, Record<string, string | number | null>> = {};
+function pickLongShortExchangeRows(tables: Array<{ rows: Array<Record<string, string>> }>): Record<string, Record<string, string | number>> {
+  const result: Record<string, Record<string, string | number>> = {};
   for (const exchange of ['binance', 'okx', 'bybit'] as const) {
     const cells = findExchangeCells(tables, exchange);
-    result[exchange] = cells.length > 0 ? {
+    result[exchange] = cells.length > 0 ? compactRecord({
       rank: parseNumber(cells[0] ?? ''),
       exchange: cells[1] ?? exchange,
-      sentiment: cells[2] ?? null,
+      sentiment: cells[2],
       retailRatio: parseNumber(cells[3] ?? ''),
       whalePositionRatio: parseNumber(cells[4] ?? ''),
       whaleAccountRatio: parseNumber(cells[5] ?? ''),
       takerBuySellRatio: firstRatio(cells[6] ?? ''),
       takerBuyPct: firstPercent(cells[6] ?? ''),
       takerSellPct: secondPercent(cells[6] ?? ''),
-    } : {};
+    }) as Record<string, string | number> : {};
   }
   result.cme = {};
   return result;
 }
 
-function pickBasisExchangeRows(tables: Array<{ rows: Array<Record<string, string>> }>): Record<string, Record<string, string | number | null>> {
-  const result: Record<string, Record<string, string | number | null>> = {};
+function pickBasisExchangeRows(tables: Array<{ rows: Array<Record<string, string>> }>): Record<string, Record<string, string | number>> {
+  const result: Record<string, Record<string, string | number>> = {};
   for (const exchange of ['binance', 'bybit', 'okx'] as const) {
     const cells = findExchangeCells(tables, exchange);
-    result[exchange] = cells.length > 0 ? {
+    result[exchange] = cells.length > 0 ? compactRecord({
       exchange: cells[0] ?? exchange,
       index: parseNumber(cells[1] ?? ''),
       quarterly: firstNumber(cells[2] ?? ''),
@@ -344,7 +351,7 @@ function pickBasisExchangeRows(tables: Array<{ rows: Array<Record<string, string
       weekly: firstNumber(cells[6] ?? ''),
       weeklyBasis: secondSignedNumber(cells[6] ?? ''),
       weeklyPremiumPct: firstPercent(cells[7] ?? ''),
-    } : {};
+    }) as Record<string, string | number> : {};
   }
   return result;
 }
@@ -356,14 +363,14 @@ function findExchangeCells(tables: Array<{ rows: Array<Record<string, string>> }
   return row ? Object.values(row).map(String) : [];
 }
 
-function exchangeFunding(row: Record<string, string | number | null> | undefined): { rate?: number | null; nextSettlement?: string; raw?: string[] } | undefined {
+function exchangeFunding(row: Record<string, string | number> | undefined): { rate?: number; nextSettlement?: string; raw?: string[] } | undefined {
   if (!row || Object.keys(row).length === 0) return undefined;
   const raw = Object.values(row).map(String);
-  return {
-    rate: raw.map(firstPercent).find((value) => value !== null) ?? null,
+  return compactRecord({
+    rate: raw.map(firstPercent).find((value) => value !== null),
     nextSettlement: raw.find((value) => /\d{1,2}:\d{2}|\d+\s*(m|h|hour|min)/i.test(value)),
     raw,
-  };
+  }) as { rate?: number; nextSettlement?: string; raw?: string[] };
 }
 
 function findRow(document: Document, symbol: CoinglassSymbol): HTMLTableRowElement | null {
@@ -381,6 +388,10 @@ function cellTexts(row: Element): string[] {
 
 function text(element: Element | Document | null | undefined): string {
   return (element?.textContent ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function documentText(document: Document): string {
+  return text(document.body) || text(document.documentElement) || text(document);
 }
 
 function extractNumbers(value: string): number[] {
@@ -449,6 +460,26 @@ function sumValues(values: Array<string | number | null | undefined>): number | 
     .map((value) => typeof value === 'number' ? value : typeof value === 'string' ? parseNumber(value) : null)
     .filter((value): value is number => value !== null);
   return numbers.length > 0 ? numbers.reduce((sum, value) => sum + value, 0) : null;
+}
+
+function average(values: number[]): number | undefined {
+  if (values.length === 0) return undefined;
+  return Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(8));
+}
+
+function compactRecord(record: Record<string, unknown>): ParsedRecord {
+  return withoutNullish(record) as ParsedRecord;
+}
+
+function withoutNullish(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutNullish);
+  if (!value || typeof value !== 'object') return value;
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([, item]) => item !== null && item !== undefined)
+      .map(([key, item]) => [key, withoutNullish(item)])
+  );
 }
 
 function rowMatchesSymbol(row: Record<string, string>, symbol: CoinglassSymbol): boolean {

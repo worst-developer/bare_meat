@@ -25,6 +25,10 @@ export default defineContentScript({
 
     const listener = (event: KeyboardEvent) => {
       if (isScreenshotShortcut(event)) {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+
         const now = Date.now();
         if (now - lastShortcutAt < 800) return;
         lastShortcutAt = now;
@@ -93,7 +97,11 @@ async function handleTradingViewScreenshotTrigger(event: KeyboardEvent): Promise
   console.log(`[bare meat🧸🥩] interval ${timeframe.normalized} / ${timeframe.dataValue || 'N/A'}`);
 
   await delay(500);
-  const telemetry = await scrapeTradingViewTelemetryWithDataWindow(symbol.normalized, timeframe.normalized);
+  const telemetry = await scrapeTradingViewTelemetryWithDataWindow(
+    symbol.normalized,
+    timeframe.normalized,
+    MANUAL_DATA_WINDOW_TIMEOUT_MS
+  );
   if (telemetry) {
     telemetry.quoteCurrency = detectQuoteCurrency(symbol.normalized);
     console.log(`[bare meat🧸🥩] CTX telemetry ${telemetry.valid ? 'valid' : 'invalid'} (${Object.keys(telemetry.metrics).length} metrics)`);

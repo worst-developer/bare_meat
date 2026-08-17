@@ -13,6 +13,13 @@ type FormErrors = {
   url?: string;
 };
 
+const PROVIDER_OPTIONS: Array<{ value: Provider; label: string }> = [
+  { value: 'chatgpt', label: 'ChatGPT' },
+  { value: 'grok', label: 'Grok' },
+  { value: 'deepseek', label: 'DeepSeek' },
+  { value: 'kimi', label: 'Kimi' },
+];
+
 export default function ChatTargetForm({ initialData, onSave, onCancel }: ChatTargetFormProps) {
   const [name, setName] = useState(initialData?.name || '');
   const [provider, setProvider] = useState<Provider>(initialData?.provider || 'chatgpt');
@@ -23,26 +30,23 @@ export default function ChatTargetForm({ initialData, onSave, onCancel }: ChatTa
   const validateForm = (): boolean => {
     const newErrors: FormErrors = {};
 
-    // Validate name
     if (!name.trim()) {
       newErrors.name = 'Name is required';
     } else if (name.length > 50) {
       newErrors.name = 'Name must be less than 50 characters';
     }
 
-    // Validate provider
     if (!provider) {
       newErrors.provider = 'Please select a provider';
     }
 
-    // Validate URL
     if (!url.trim()) {
       newErrors.url = 'Conversation URL is required';
     } else {
       try {
         new URL(url.trim());
       } catch {
-        newErrors.url = 'Please enter a valid URL (include https://)';
+        newErrors.url = 'Please enter a valid URL with https://';
       }
     }
 
@@ -50,168 +54,84 @@ export default function ChatTargetForm({ initialData, onSave, onCancel }: ChatTa
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!validateForm()) {
-      return;
-    }
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!validateForm()) return;
 
-    const target: ChatTarget = {
+    onSave({
       id: initialData?.id || `target_${Date.now()}`,
       name: name.trim(),
       provider,
       symbols: ['*'],
       chatUrl: url.trim(),
       enabled,
-    };
-
-    onSave(target);
-  };
-
-  const handleCancel = () => {
-    if (confirm('Are you sure you want to cancel? Unsaved changes will be lost.')) {
-      onCancel();
-    }
+    });
   };
 
   return (
-    <form onSubmit={handleSubmit} className="bp-chat-target-form">
-      <h2 style={{ fontSize: '18px', marginBottom: '20px', color: '#4fc3f7' }}>
-        {initialData ? 'Edit Chat Target' : 'Add New Chat Target'}
+    <form onSubmit={handleSubmit} className="chat-target-form">
+      <h2 className="settings-section__title">
+        {initialData ? 'Edit chat target' : 'Add chat target'}
       </h2>
 
-      {/* Name Field */}
-      <div style={{ marginBottom: '16px' }}>
-        <label style={{ display: 'block', marginBottom: '8px', fontSize: '13px', color: '#ccc' }}>
-          Name *
-        </label>
+      <label className="form-control">
+        <span className="label-text">Name</span>
         <input
+          className={`input input-bordered${errors.name ? ' input-error' : ''}`}
           type="text"
           value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="e.g., BTC Analysis, SOL Trading"
-          style={{
-            width: '100%',
-            padding: '10px',
-            background: '#2a2a4e',
-            border: errors.name ? '2px solid #f44336' : '1px solid #444',
-            borderRadius: '4px',
-            color: '#fff',
-            fontSize: '14px',
-          }}
+          onChange={(event) => setName(event.target.value)}
+          placeholder="BTC analysis"
         />
-        {errors.name && (
-          <span style={{ color: '#f44336', fontSize: '12px', marginTop: '4px' }}>
-            {errors.name}
-          </span>
-        )}
-      </div>
+        {errors.name && <span className="form-error">{errors.name}</span>}
+      </label>
 
-      {/* Provider Field */}
-      <div style={{ marginBottom: '16px' }}>
-        <label style={{ display: 'block', marginBottom: '8px', fontSize: '13px', color: '#ccc' }}>
-          Provider *
-        </label>
-        <select
-          value={provider}
-          onChange={(e) => setProvider(e.target.value as Provider)}
-          style={{
-            width: '100%',
-            padding: '10px',
-            background: '#2a2a4e',
-            border: errors.provider ? '2px solid #f44336' : '1px solid #444',
-            borderRadius: '4px',
-            color: '#fff',
-            fontSize: '14px',
-          }}
-        >
-          <option value="chatgpt">ChatGPT</option>
-          <option value="grok">Grok</option>
-          <option value="deepseek">DeepSeek</option>
-          <option value="kimi">Kimi</option>
-        </select>
-        {errors.provider && (
-          <span style={{ color: '#f44336', fontSize: '12px', marginTop: '4px' }}>
-            {errors.provider}
-          </span>
-        )}
-      </div>
+      <label className="form-control">
+        <span className="label-text">Provider</span>
+        <div className={`provider-picker${errors.provider ? ' provider-picker--error' : ''}`}>
+          {PROVIDER_OPTIONS.map((option) => (
+            <label key={option.value} className={`provider-option${provider === option.value ? ' provider-option--selected' : ''}`}>
+              <input
+                type="radio"
+                name="provider"
+                value={option.value}
+                checked={provider === option.value}
+                onChange={() => setProvider(option.value)}
+              />
+              <span>{option.label}</span>
+            </label>
+          ))}
+        </div>
+        {errors.provider && <span className="form-error">{errors.provider}</span>}
+      </label>
 
-      {/* URL Field */}
-      <div style={{ marginBottom: '16px' }}>
-        <label style={{ display: 'block', marginBottom: '8px', fontSize: '13px', color: '#ccc' }}>
-          Conversation URL *
-        </label>
+      <label className="form-control">
+        <span className="label-text">Conversation URL</span>
         <input
+          className={`input input-bordered${errors.url ? ' input-error' : ''}`}
           type="text"
           value={url}
-          onChange={(e) => setUrl(e.target.value)}
+          onChange={(event) => setUrl(event.target.value)}
           placeholder="https://chatgpt.com/c/xxxxxx"
-          style={{
-            width: '100%',
-            padding: '10px',
-            background: '#2a2a4e',
-            border: errors.url ? '2px solid #f44336' : '1px solid #444',
-            borderRadius: '4px',
-            color: '#fff',
-            fontSize: '14px',
-          }}
         />
-        {errors.url && (
-          <span style={{ color: '#f44336', fontSize: '12px', marginTop: '4px' }}>
-            {errors.url}
-          </span>
-        )}
-        <p style={{ fontSize: '11px', color: '#888', margin: '8px 0 0 0' }}>
-          Paste the URL of an existing conversation or leave blank for new one
-        </p>
-      </div>
+        {errors.url && <span className="form-error">{errors.url}</span>}
+      </label>
 
-      {/* Enabled Toggle */}
-      <div style={{ marginBottom: '24px', display: 'flex', alignItems: 'center' }}>
-        <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-            style={{ marginRight: '8px', width: '18px', height: '18px' }}
-          />
-          <span style={{ fontSize: '14px', color: '#ccc' }}>Enabled</span>
-        </label>
-      </div>
+      <label className="chat-target-form__enabled" aria-label="Enabled">
+        <input
+          className="toggle toggle-sm"
+          type="checkbox"
+          checked={enabled}
+          onChange={(event) => setEnabled(event.target.checked)}
+        />
+      </label>
 
-      {/* Actions */}
-      <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-        <button
-          type="button"
-          onClick={handleCancel}
-          style={{
-            padding: '10px 20px',
-            background: '#333',
-            border: '1px solid #444',
-            borderRadius: '4px',
-            color: '#fff',
-            cursor: 'pointer',
-            fontSize: '14px',
-          }}
-        >
+      <div className="chat-target-form__actions">
+        <button className="btn btn-ghost btn-sm" type="button" onClick={onCancel}>
           Cancel
         </button>
-        <button
-          type="submit"
-          style={{
-            padding: '10px 20px',
-            background: '#4caf50',
-            border: 'none',
-            borderRadius: '4px',
-            color: '#fff',
-            cursor: 'pointer',
-            fontSize: '14px',
-            fontWeight: '600',
-          }}
-        >
-          {initialData ? 'Save Changes' : 'Create Target'}
+        <button className="btn btn-primary btn-sm" type="submit">
+          {initialData ? 'Save changes' : 'Create target'}
         </button>
       </div>
     </form>

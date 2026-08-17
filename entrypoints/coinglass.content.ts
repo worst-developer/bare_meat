@@ -8,6 +8,11 @@ export default defineContentScript({
 
   main() {
     chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendResponse) => {
+      if (message.type === 'CG_CONTENT_READY') {
+        sendResponse({ success: true });
+        return false;
+      }
+
       if (message.type !== 'CG_SCRAPE_PAGE' && message.type !== 'CG_PREPARE_SCREENSHOT_TARGET') return false;
 
       if (message.type === 'CG_PREPARE_SCREENSHOT_TARGET') {

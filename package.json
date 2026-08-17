@@ -1,7 +1,7 @@
 {
   "name": "bare-meat",
   "displayName": "bare meat🧸🥩",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "__MSG_extDescription__",
   "type": "module",
   "scripts": {
@@ -20,10 +20,13 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@types/chrome": "^0.0.289",
     "@types/node": "^22.15.12",
     "@types/react": "^18.3.23",
     "@types/react-dom": "^18.3.7",
+    "daisyui": "^5.7.17",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.8.3",
     "vite": "^6.3.5",
     "vitest": "^4.1.10",

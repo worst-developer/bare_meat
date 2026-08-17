@@ -62,14 +62,14 @@ export interface CoinglassSnapshot {
 }
 
 export interface CoinglassExchangeFunding {
-  rate?: number | null;
+  rate?: number;
   nextSettlement?: string;
   raw?: string[];
 }
 
 export interface CoinglassFundingRateSymbol {
-  average?: number | null;
-  spread?: number | null;
+  average?: number;
+  spread?: number;
   highest?: string;
   lowest?: string;
   binance?: CoinglassExchangeFunding;
@@ -79,30 +79,30 @@ export interface CoinglassFundingRateSymbol {
 }
 
 export interface CoinglassOpenInterest {
-  oiUsd?: number | null;
-  change1hPct?: number | null;
-  change4hPct?: number | null;
-  change24hPct?: number | null;
-  oi24hVol?: number | null;
-  exchanges: Record<string, Record<string, string | number | null>>;
+  oiUsd?: number;
+  change1hPct?: number;
+  change4hPct?: number;
+  change24hPct?: number;
+  oi24hVol?: number;
+  exchanges: Record<string, Record<string, string | number>>;
   rawRow?: string[];
 }
 
 export interface CoinglassLiquidationsTotals {
-  '1h': { long: number | null; short: number | null };
-  '4h': { long: number | null; short: number | null };
-  '12h': { long: number | null; short: number | null };
-  '24h': { long: number | null; short: number | null };
+  '1h': { long?: number; short?: number };
+  '4h': { long?: number; short?: number };
+  '12h': { long?: number; short?: number };
+  '24h': { long?: number; short?: number };
   rawRow?: string[];
 }
 
 export interface CoinglassLongShortRatio {
   timeframe: '1h' | '4h' | '12h' | '24h';
-  longVolume?: number | null;
-  shortVolume?: number | null;
-  longPct?: number | null;
-  shortPct?: number | null;
-  exchanges: Record<string, Record<string, string | number | null>>;
+  longVolume?: number;
+  shortVolume?: number;
+  longPct?: number;
+  shortPct?: number;
+  exchanges: Record<string, Record<string, string | number>>;
 }
 
 export interface CoinglassGenericTable {

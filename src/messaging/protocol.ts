@@ -21,6 +21,7 @@ export type ExtensionMessage =
   | { type: 'CG_SCRAPE_PROGRESS'; progress: CoinglassScrapeProgress }
   | { type: 'CG_SCRAPE_COMPLETE'; snapshot: CoinglassSnapshot }
   | { type: 'CG_SCRAPE_FAILED'; snapshot: CoinglassSnapshot }
+  | { type: 'CG_CONTENT_READY' }
   | { type: 'CG_SCRAPE_PAGE'; section: CoinglassSection; symbol: CoinglassSymbol; timeframe?: '1h' | '4h' | '12h' | '24h' }
   | {
     type: 'CG_PREPARE_SCREENSHOT_TARGET';

@@ -1,4 +1,5 @@
 import { defineConfig } from 'wxt';
+import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
   browser: 'chrome',
@@ -7,7 +8,7 @@ export default defineConfig({
     name: '__MSG_extName__',
     short_name: '__MSG_extShortName__',
     description: '__MSG_extDescription__',
-    version: '0.6.0',
+    version: '0.7.0',
     default_locale: 'en',
     action: {
       default_title: '__MSG_extName__',
@@ -33,4 +34,10 @@ export default defineConfig({
   },
   outDir: 'dist',
   publicDir: 'public',
+  vite: () => ({
+    build: {
+      assetsInlineLimit: 0,
+    },
+    plugins: [tailwindcss()],
+  }),
 });

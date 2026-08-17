@@ -6,8 +6,8 @@ describe('Coinglass prompt context', () => {
   it('formats a Coinglass snapshot as prompt context', () => {
     const context = buildCoinglassContext(snapshot());
     expect(context).toContain('Coinglass market context');
-    expect(context).toContain('"BTC"');
-    expect(context).toContain('openInterest');
+    expect(context).toContain('Symbols: BTC');
+    expect(context).toContain('Sections: openInterest');
   });
 
   it('allows standalone Coinglass prompt without screenshots', () => {

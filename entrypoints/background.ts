@@ -16,12 +16,13 @@ import type {
   PendingCapture,
   ScreenshotMeta,
 } from '../src/types';
-import { buildScreenshotKey, generateId } from '../src/utils/symbols';
+import { buildScreenshotKey, computeHash, generateId } from '../src/utils/symbols';
 
 const DEFAULT_CLIPBOARD_TIMEOUT_MS = 4000;
 const CLIPBOARD_IMAGE_WAIT_MS = 6000;
 const COINGLASS_PAGE_DELAY_MS = 1400;
 const COINGLASS_LOAD_DELAY_MS = 2200;
+const COINGLASS_MESSAGE_TIMEOUT_MS = 12000;
 
 let offscreenDocumentCreated = false;
 let captureProcessorRunning = false;
@@ -305,12 +306,12 @@ async function scrapeCoinglassPage(
   await delay(COINGLASS_LOAD_DELAY_MS);
   await ensureCoinglassContentScript(tabId);
 
-  const response = await chrome.tabs.sendMessage(tabId, {
+  const response = await sendCoinglassTabMessage(tabId, {
     type: 'CG_SCRAPE_PAGE',
     section,
     symbol,
     timeframe,
-  } satisfies ExtensionMessage).catch((error) => ({ success: false, error: String(error) }));
+  }).catch((error) => ({ success: false, error: String(error) }));
 
   if (!response?.success) {
     throw new Error(response?.error ?? `Coinglass did not return ${section} ${symbol}`);
@@ -370,11 +371,9 @@ async function waitForTabComplete(tabId: number, timeoutMs = 25000): Promise<voi
 }
 
 async function ensureCoinglassContentScript(tabId: number): Promise<void> {
-  const response = await chrome.tabs.sendMessage(tabId, {
-    type: 'CG_SCRAPE_PAGE',
-    section: 'fundingRate',
-    symbol: 'BTC',
-  } satisfies ExtensionMessage).catch(() => null);
+  const response = await sendCoinglassTabMessage(tabId, {
+    type: 'CG_CONTENT_READY',
+  }).catch(() => null);
   if (response) return;
 
   await chrome.scripting.executeScript({
@@ -382,6 +381,18 @@ async function ensureCoinglassContentScript(tabId: number): Promise<void> {
     files: ['content-scripts/coinglass.js'],
   }).catch(() => {});
   await delay(300);
+}
+
+function sendCoinglassTabMessage(
+  tabId: number,
+  message: Extract<ExtensionMessage, { type: 'CG_CONTENT_READY' | 'CG_SCRAPE_PAGE' }>
+): Promise<any> {
+  return Promise.race([
+    chrome.tabs.sendMessage(tabId, message),
+    delay(COINGLASS_MESSAGE_TIMEOUT_MS).then(() => {
+      throw new Error(`Coinglass content script did not respond within ${Math.round(COINGLASS_MESSAGE_TIMEOUT_MS / 1000)}s`);
+    }),
+  ]);
 }
 
 async function emitCoinglassProgress(progress: CoinglassScrapeProgress): Promise<void> {
@@ -428,13 +439,16 @@ async function processCaptureQueue(): Promise<void> {
 async function processCapture(pending: PendingCapture): Promise<void> {
   console.log(`[bare meat🧸🥩] capturing ${pending.symbol.normalized} ${pending.timeframe.normalized}`);
 
-  const result = await waitForClipboardImage(pending).catch((error) => {
+  const result = await captureVisibleTradingViewTab(pending).catch((error) => {
+    console.error('[bare meat🧸🥩] Direct tab capture failed:', error);
+    return null;
+  }) ?? await waitForClipboardImage(pending).catch((error) => {
     console.error('[bare meat🧸🥩] Clipboard reader failed:', error);
     return null;
   });
 
   if (!result?.dataUrl || !result.hash) {
-    console.error(`[bare meat🧸🥩] Could not import clipboard image for ${pending.symbol.normalized} ${pending.timeframe.normalized}`);
+    console.error(`[bare meat🧸🥩] Could not capture image for ${pending.symbol.normalized} ${pending.timeframe.normalized}`);
     return;
   }
 
@@ -472,6 +486,24 @@ async function processCapture(pending: PendingCapture): Promise<void> {
   });
 
   console.log(`[bare meat🧸🥩] saved ${screenshotMeta.key}`);
+}
+
+async function captureVisibleTradingViewTab(pending: PendingCapture): Promise<ClipboardReadResponse | null> {
+  if (pending.sourceTabId < 0) return null;
+
+  const tab = await chrome.tabs.get(pending.sourceTabId);
+  if (!tab.windowId) return null;
+
+  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+  const blob = dataUrlToBlob(dataUrl, 'image/png');
+  const hash = await computeHash(await blob.arrayBuffer());
+
+  return {
+    success: true,
+    dataUrl,
+    hash,
+    mimeType: blob.type || 'image/png',
+  };
 }
 
 async function waitForClipboardImage(pending: PendingCapture): Promise<ClipboardReadResponse | null> {

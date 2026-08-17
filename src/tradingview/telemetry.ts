@@ -24,22 +24,7 @@ export async function scrapeTradingViewTelemetryWithDataWindow(
   timeframe: string,
   timeoutMs = DATA_WINDOW_TIMEOUT_MS
 ): Promise<TradingViewTelemetrySnapshot | null> {
-  const immediate = scrapeTradingViewTelemetry(symbol, timeframe);
-  if (immediate) return immediate;
-
-  let tab = findDataWindowTab();
-  if (!tab) {
-    const launcher = findDataWindowControl();
-    if (!launcher) return null;
-    launcher.click();
-    await delay(250);
-    tab = findDataWindowTab();
-  }
-
-  if (tab) {
-    tab.click();
-    await delay(150);
-  }
+  await openDataWindowTab();
 
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
@@ -49,6 +34,21 @@ export async function scrapeTradingViewTelemetryWithDataWindow(
   }
 
   return null;
+}
+
+async function openDataWindowTab(): Promise<void> {
+  let tab = findDataWindowTab();
+  if (!tab) {
+    const launcher = findDataWindowControl();
+    if (!launcher) return;
+    launcher.click();
+    await delay(300);
+    tab = findDataWindowTab();
+  }
+
+  if (!tab) return;
+  tab.click();
+  await delay(200);
 }
 
 export function scrapeTradingViewTelemetry(symbol: string, timeframe: string): TradingViewTelemetrySnapshot | null {
@@ -335,8 +335,8 @@ function findDataWindowControl(): HTMLElement | null {
 function findDataWindowTab(): HTMLElement | null {
   const candidates = document.querySelectorAll<HTMLElement>('button, [role="tab"], [role="button"], div, span');
   for (const candidate of candidates) {
-    const text = normalizedText(candidate.innerText || candidate.textContent || '');
-    if (text === 'Data Window' && isVisible(candidate)) return candidate;
+    const text = normalizedText(candidate.innerText || candidate.textContent || '').toLowerCase();
+    if (text === 'data window' && isVisible(candidate)) return candidate;
   }
 
   return null;
