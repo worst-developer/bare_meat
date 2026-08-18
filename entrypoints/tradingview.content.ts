@@ -4,6 +4,8 @@ import { MANUAL_DATA_WINDOW_TIMEOUT_MS, scrapeTradingViewTelemetryWithDataWindow
 import type { ExtensionMessage } from '../src/messaging/protocol';
 import type { TradingViewTelemetrySnapshot } from '../src/types';
 
+const SHORTCUT_DATA_WINDOW_TIMEOUT_MS = 5000;
+
 // @ts-check
 /** @type {import('wxt').ContentScript} */
 export default defineContentScript({
@@ -15,7 +17,8 @@ export default defineContentScript({
   
   async main() {
     let lastShortcutAt = 0;
-    const frame = window.top === window ? 'top' : 'child';
+    const isTopFrame = window.top === window;
+    const frame = isTopFrame ? 'top' : 'child';
     console.log(`[bare meat🧸🥩] TradingView content script loaded (${frame})`);
     void chrome.runtime.sendMessage({
       type: 'TV_CONTENT_READY',
@@ -24,6 +27,7 @@ export default defineContentScript({
     } satisfies ExtensionMessage).catch(() => {});
 
     const listener = (event: KeyboardEvent) => {
+      if (!isTopFrame) return;
       if (isScreenshotShortcut(event)) {
         event.preventDefault();
         event.stopPropagation();
@@ -90,6 +94,7 @@ async function scrapeCurrentTelemetry(): Promise<{
 async function handleTradingViewScreenshotTrigger(): Promise<void> {
   const frame = window.top === window ? 'top' : 'child';
   console.log(`[bare meat🧸🥩] shortcut detected (${frame})`);
+  if (window.top !== window) return;
 
   const symbol = detectTradingViewSymbol();
   const timeframe = detectTradingViewInterval() ?? fallbackTradingViewInterval();
@@ -111,7 +116,7 @@ async function handleTradingViewScreenshotTrigger(): Promise<void> {
   const telemetry = await scrapeTradingViewTelemetryWithDataWindow(
     symbol.normalized,
     timeframe.normalized,
-    MANUAL_DATA_WINDOW_TIMEOUT_MS
+    SHORTCUT_DATA_WINDOW_TIMEOUT_MS
   );
   if (telemetry) {
     telemetry.quoteCurrency = detectQuoteCurrency(symbol.normalized);

@@ -42,19 +42,19 @@ export default defineBackground(() => {
     });
   }
 
-	  chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendResponse) => {
-	    void handleRuntimeMessage(message, sender).then(sendResponse);
-	    return true;
-	  });
+  chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendResponse) => {
+    void handleRuntimeMessage(message, sender).then(sendResponse);
+    return true;
+  });
 
-	  chrome.commands?.onCommand.addListener((command) => {
-	    if (command === 'capture_tradingview') {
-	      void triggerActiveTradingViewCapture();
-	    }
-	  });
+  chrome.commands?.onCommand.addListener((command) => {
+    if (command === 'capture_tradingview') {
+      void triggerActiveTradingViewCapture();
+    }
+  });
 
-	  console.log('[bare meat🧸🥩] Background service worker initialized');
-	});
+  console.log('[bare meat🧸🥩] Background service worker initialized');
+});
 
 async function handleRuntimeMessage(
   message: ExtensionMessage,
@@ -90,7 +90,7 @@ async function handleRuntimeMessage(
   } catch (error) {
     console.error('[bare meat🧸🥩] Message handler error:', error);
     return { success: false, error: String(error) };
-	}
+  }
 }
 
 async function triggerActiveTradingViewCapture(): Promise<void> {
