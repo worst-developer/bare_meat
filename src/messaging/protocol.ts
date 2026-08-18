@@ -14,6 +14,8 @@ import type {
 
 export type ExtensionMessage =
   | { type: 'TV_CONTENT_READY'; href: string; frame: 'top' | 'child' }
+  | { type: 'TV_CONTENT_PING' }
+  | { type: 'TV_CAPTURE_SHORTCUT' }
   | { type: 'TV_CAPTURE_TRIGGERED'; capture: PendingCapture }
   | { type: 'TV_READ_CLIPBOARD_IMAGE' }
   | { type: 'TV_SCRAPE_TELEMETRY' }

@@ -42,13 +42,19 @@ export default defineBackground(() => {
     });
   }
 
-  chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendResponse) => {
-    void handleRuntimeMessage(message, sender).then(sendResponse);
-    return true;
-  });
+	  chrome.runtime.onMessage.addListener((message: ExtensionMessage, sender, sendResponse) => {
+	    void handleRuntimeMessage(message, sender).then(sendResponse);
+	    return true;
+	  });
 
-  console.log('[bare meat🧸🥩] Background service worker initialized');
-});
+	  chrome.commands?.onCommand.addListener((command) => {
+	    if (command === 'capture_tradingview') {
+	      void triggerActiveTradingViewCapture();
+	    }
+	  });
+
+	  console.log('[bare meat🧸🥩] Background service worker initialized');
+	});
 
 async function handleRuntimeMessage(
   message: ExtensionMessage,
@@ -84,6 +90,40 @@ async function handleRuntimeMessage(
   } catch (error) {
     console.error('[bare meat🧸🥩] Message handler error:', error);
     return { success: false, error: String(error) };
+	}
+}
+
+async function triggerActiveTradingViewCapture(): Promise<void> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id || !isTradingViewUrl(tab.url)) return;
+
+  await ensureTradingViewContentScript(tab.id);
+  await chrome.tabs.sendMessage(tab.id, {
+    type: 'TV_CAPTURE_SHORTCUT',
+  } satisfies ExtensionMessage).catch((error) => {
+    console.error('[bare meat🧸🥩] TradingView command capture failed:', error);
+  });
+}
+
+async function ensureTradingViewContentScript(tabId: number): Promise<void> {
+  const ready = await chrome.tabs.sendMessage(tabId, {
+    type: 'TV_CONTENT_PING',
+  } satisfies ExtensionMessage).then(() => true).catch(() => false);
+  if (ready) return;
+
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ['content-scripts/tradingview.js'],
+  }).catch(() => {});
+  await delay(300);
+}
+
+function isTradingViewUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    return new URL(url).hostname.endsWith('tradingview.com');
+  } catch {
+    return false;
   }
 }
 

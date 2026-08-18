@@ -32,7 +32,7 @@ export default defineContentScript({
         const now = Date.now();
         if (now - lastShortcutAt < 800) return;
         lastShortcutAt = now;
-        void handleTradingViewScreenshotTrigger(event);
+        void handleTradingViewScreenshotTrigger();
       }
     };
 
@@ -40,6 +40,17 @@ export default defineContentScript({
     document.addEventListener('keydown', listener, true);
 
     chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendResponse) => {
+      if (message.type === 'TV_CONTENT_PING') {
+        sendResponse({ success: true });
+        return false;
+      }
+
+      if (message.type === 'TV_CAPTURE_SHORTCUT') {
+        if (window.top !== window) return false;
+        void handleTradingViewScreenshotTrigger().then(() => sendResponse({ success: true }));
+        return true;
+      }
+
       if (message.type === 'TV_SCRAPE_TELEMETRY') {
         if (window.top !== window) return false;
         void scrapeCurrentTelemetry().then(sendResponse);
@@ -76,7 +87,7 @@ async function scrapeCurrentTelemetry(): Promise<{
   return { success: true, telemetry };
 }
 
-async function handleTradingViewScreenshotTrigger(event: KeyboardEvent): Promise<void> {
+async function handleTradingViewScreenshotTrigger(): Promise<void> {
   const frame = window.top === window ? 'top' : 'child';
   console.log(`[bare meat🧸🥩] shortcut detected (${frame})`);
 

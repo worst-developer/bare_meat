@@ -10,10 +10,19 @@ export default defineConfig({
     description: '__MSG_extDescription__',
     version: '0.7.0',
     default_locale: 'en',
-    action: {
-      default_title: '__MSG_extName__',
-    },
-    permissions: ['sidePanel', 'storage', 'offscreen', 'clipboardRead', 'tabs', 'scripting', 'activeTab'],
+	    action: {
+	      default_title: '__MSG_extName__',
+	    },
+	    commands: {
+	      capture_tradingview: {
+	        suggested_key: {
+	          default: 'Ctrl+Shift+S',
+	          mac: 'Command+Shift+S',
+	        },
+	        description: 'Capture TradingView chart',
+	      },
+	    },
+	    permissions: ['sidePanel', 'storage', 'offscreen', 'clipboardRead', 'tabs', 'scripting', 'activeTab'],
     host_permissions: [
       '<all_urls>',
       'https://www.tradingview.com/*',
