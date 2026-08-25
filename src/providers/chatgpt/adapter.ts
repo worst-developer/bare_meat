@@ -20,7 +20,10 @@ import {
   CHATGPT_SEND_SELECTORS,
 } from './selectors';
 
-const CHATGPT_UPLOAD_BATCH_SIZE = 4;
+const CHATGPT_UPLOAD_BATCH_SIZE = 2;
+const CHATGPT_UPLOAD_BATCH_DELAY_MS = 2200;
+const CHATGPT_BATCH_UPLOAD_TIMEOUT_MS = 45000;
+const CHATGPT_UPLOAD_FALLBACK_SETTLE_MS = 1600;
 
 export class ChatGptAdapter implements ProviderAdapter {
   readonly provider = 'chatgpt' as const;
@@ -43,7 +46,12 @@ export class ChatGptAdapter implements ProviderAdapter {
   }
 
   async prepareFiles(screenshots: IncomingScreenshot[]): Promise<File[]> {
-    return Promise.all(screenshots.map(incomingScreenshotToFile));
+    const files: File[] = [];
+    for (const screenshot of screenshots) {
+      files.push(await incomingScreenshotToFile(screenshot));
+      await delay(0);
+    }
+    return files;
   }
 
   async attachFiles(files: File[]): Promise<void> {
@@ -58,8 +66,10 @@ export class ChatGptAdapter implements ProviderAdapter {
 
     for (const batch of chatGptUploadBatches(files)) {
       await this.attachFileBatch(composer, batch);
-      this.attachedCount += batch.length;
-      await delay(1500);
+      const nextAttachedCount = this.attachedCount + batch.length;
+      await this.waitForUploadedAttachments(nextAttachedCount, CHATGPT_BATCH_UPLOAD_TIMEOUT_MS);
+      this.attachedCount = nextAttachedCount;
+      await delay(CHATGPT_UPLOAD_BATCH_DELAY_MS);
     }
 
     this.composer = null;
@@ -135,16 +145,23 @@ export class ChatGptAdapter implements ProviderAdapter {
       return;
     }
 
-    pasteFilesIntoElement(composer, files);
-    dropFilesOnElement(this.findDropTarget() ?? composer, files);
-    await delay(1200);
-    if (this.countNewAttachmentUi() >= this.attachedCount + files.length) return;
-
     this.findAttachmentButton()?.click();
     await delay(500);
     const menuInput = this.findCompatibleFileInput(files) ?? this.findFileInput();
-    if (!menuInput) throw new Error(`ChatGPT file input not found for ${files.map((file) => file.name).join(', ')}`);
-    attachFilesToInput(menuInput, files);
+    if (menuInput) {
+      attachFilesToInput(menuInput, files);
+      return;
+    }
+
+    dropFilesOnElement(this.findDropTarget() ?? composer, files);
+    await delay(CHATGPT_UPLOAD_FALLBACK_SETTLE_MS);
+    if (this.countNewAttachmentUi() >= this.attachedCount + files.length) return;
+
+    pasteFilesIntoElement(composer, files);
+    await delay(CHATGPT_UPLOAD_FALLBACK_SETTLE_MS);
+    if (this.countNewAttachmentUi() < this.attachedCount + files.length) {
+      throw new Error(`ChatGPT file input not found for ${files.map((file) => file.name).join(', ')}`);
+    }
   }
 
   private findCompatibleFileInput(files: File[]): HTMLInputElement | null {
