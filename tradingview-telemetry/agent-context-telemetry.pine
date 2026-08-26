@@ -133,7 +133,7 @@ trimLabels(array<label> labels, int limit) =>
 levelLine(line currentLine, float value, int startIndex, color lineColor, string lineStyle, int lineWidth) =>
     result = currentLine
     if not na(value)
-        safeStart = math.max(startIndex, bar_index - 9999)
+        safeStart = math.min(bar_index, math.max(startIndex, bar_index - 450))
         if na(result)
             result := line.new(safeStart, value, bar_index, value, extend=extend.right, color=lineColor, style=lineStyle, width=lineWidth)
         else
