@@ -92,6 +92,10 @@ export async function getBlob(blobId: string): Promise<Blob | undefined> {
   return (await getDb()).get('blobs', blobId);
 }
 
+export async function deleteBlob(blobId: string): Promise<void> {
+  await (await getDb()).delete('blobs', blobId);
+}
+
 export async function deleteScreenshot(key: string): Promise<void> {
   const database = await getDb();
   const existing = await database.get('screenshots', key);
