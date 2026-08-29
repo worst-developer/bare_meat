@@ -7,10 +7,11 @@ import type {
   CoinglassSection,
   CoinglassSymbol,
 } from './types';
+import { COINGLASS_SYMBOLS } from './types';
 
 const EXCHANGES = ['binance', 'bybit', 'okx', 'cme'] as const;
 const LIQUIDATION_PERIODS = ['1h', '4h', '12h', '24h'] as const;
-const TRACKED_SPOT_NETFLOW_SYMBOLS: CoinglassSymbol[] = ['BTC', 'ETH', 'SOL'];
+const TRACKED_SPOT_NETFLOW_SYMBOLS: CoinglassSymbol[] = [...COINGLASS_SYMBOLS];
 type ParsedScalar = string | number | boolean;
 type ParsedValue = ParsedScalar | ParsedRecord | ParsedRecord[] | string[];
 interface ParsedRecord {
@@ -39,7 +40,7 @@ export function parseCoinglassPage(
 
 export function parseGenericPage(document: Document, symbol?: CoinglassSymbol): CoinglassGenericPage {
   const title = text(document.querySelector('h1')) || document.title || 'Coinglass page';
-  const selectedSymbol = symbol ?? selectedTabText(document, ['BTC', 'ETH', 'SOL']) as CoinglassSymbol | undefined;
+  const selectedSymbol = symbol ?? selectedTabText(document, [...COINGLASS_SYMBOLS]) as CoinglassSymbol | undefined;
   const selectedTimeframe = selectedTabText(document, ['1 hour', '4 hour', '12 hour', '24 hour']);
   return {
     title,
@@ -177,7 +178,7 @@ export function parseSpotInflowOutflow(document: Document, symbol: CoinglassSymb
 
   const tables = filterTablesBySymbols(extractTables(document).slice(0, 5), TRACKED_SPOT_NETFLOW_SYMBOLS);
   if (tables.length === 0) {
-    throw new Error('Coinglass spot inflow/outflow BTC/ETH/SOL table data was not found');
+    throw new Error(`Coinglass spot inflow/outflow ${COINGLASS_SYMBOLS.join('/')} table data was not found`);
   }
 
   return {

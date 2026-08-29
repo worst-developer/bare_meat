@@ -1,6 +1,7 @@
 import { defineContentScript } from 'wxt/utils/define-content-script';
 import type { ExtensionMessage } from '../src/messaging/protocol';
 import { parseCoinglassPage } from '../src/providers/coinglass/parser';
+import { COINGLASS_SYMBOLS } from '../src/providers/coinglass/types';
 
 export default defineContentScript({
   matches: ['https://www.coinglass.com/*', 'https://coinglass.com/*'],
@@ -129,9 +130,7 @@ async function selectNearestControl(anchor: HTMLElement | null, labels: string[]
 async function setNearestInputValue(anchor: HTMLElement | null, value: string): Promise<void> {
   const scope = closestChartCard(anchor) ?? document.body;
   const input = Array.from(scope.querySelectorAll<HTMLInputElement>('input')).find((candidate) => (
-    candidate.value.toUpperCase().includes('BTC')
-    || candidate.value.toUpperCase().includes('ETH')
-    || candidate.value.toUpperCase().includes('SOL')
+    COINGLASS_SYMBOLS.some((symbol) => candidate.value.toUpperCase().includes(symbol))
     || candidate.placeholder.toLowerCase().includes('search')
   ));
   if (!input) return;

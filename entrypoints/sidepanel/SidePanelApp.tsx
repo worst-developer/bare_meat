@@ -3,6 +3,7 @@ import SettingsModal from './components/SettingsModal';
 import { SOURCE_LOGOS, logoForProvider, providerLogoNeedsBackplate } from './logos';
 import type { ExtensionMessage } from '../../src/messaging/protocol';
 import type { ChatTarget, CoinglassHeatmapTimeframe, CoinglassScreenshotSettings, CoinglassSection, CoinglassSettings, CoinglassSnapshot, CoinglassSymbol, PromptSettings, ScreenshotMeta, TradingViewTelemetrySnapshot } from '../../src/types';
+import { COINGLASS_SYMBOLS } from '../../src/types';
 import * as db from '../../src/storage/db';
 import { COINGLASS_STORAGE_KEYS, DEFAULT_COINGLASS_SCREENSHOT_SETTINGS, DEFAULT_COINGLASS_SETTINGS, enabledCoinglassSections, mergeCoinglassScreenshotSettings, mergeCoinglassSettings } from '../../src/providers/coinglass/config';
 import { loadCoinglassSnapshot } from '../../src/providers/coinglass/storage';
@@ -643,7 +644,7 @@ export default function SidePanelApp(): JSX.Element {
             <fieldset className="choice-fieldset">
               <legend className="choice-fieldset__label">Symbols</legend>
               <div className="symbol-options">
-                {(['BTC', 'ETH', 'SOL'] as CoinglassSymbol[]).map((symbol) => (
+                {COINGLASS_SYMBOLS.map((symbol) => (
                   <label key={symbol} className="symbol-option">
                     <input
                       className="checkbox checkbox-sm"
@@ -1229,10 +1230,7 @@ function normalizeCoinglassSymbols(value: unknown): CoinglassSymbol[] {
 
 function coinglassSymbolFromText(value: string): CoinglassSymbol | null {
   const normalized = normalizeSymbol(value);
-  if (normalized.includes('BTC')) return 'BTC';
-  if (normalized.includes('ETH')) return 'ETH';
-  if (normalized.includes('SOL')) return 'SOL';
-  return null;
+  return COINGLASS_SYMBOLS.find((symbol) => normalized.includes(symbol)) ?? null;
 }
 
 function formatCoinglassSection(section: CoinglassSection): string {

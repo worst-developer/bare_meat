@@ -88,5 +88,6 @@ function isObject(value: unknown): value is Record<string, unknown> {
 function coinglassEtfSlug(symbol: CoinglassSymbol): string {
   if (symbol === 'BTC') return 'bitcoin';
   if (symbol === 'ETH') return 'ethereum';
-  return 'solana';
+  if (symbol === 'SOL') return 'solana';
+  return 'hype';
 }
