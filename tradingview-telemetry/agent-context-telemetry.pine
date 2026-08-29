@@ -1,5 +1,5 @@
 //@version=6
-indicator("Market Context Telemetry [Agent]", overlay=true, max_bars_back=500, max_lines_count=500, max_labels_count=200, max_boxes_count=200, format=format.price, precision=8)
+indicator("Market Context Telemetry [Agent]", overlay=true, max_bars_back=500, max_lines_count=500, max_labels_count=200, max_boxes_count=200, format=format.price)
 
 groupGeneral = "01 - General"
 groupCross = "02 - Cross Markets"
