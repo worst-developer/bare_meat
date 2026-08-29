@@ -44,6 +44,14 @@ export async function incomingScreenshotToFile(screenshot: IncomingScreenshot): 
   return new File([blob], screenshot.filename, { type: screenshot.mimeType });
 }
 
+export async function incomingScreenshotToFileViaFetch(screenshot: IncomingScreenshot): Promise<File> {
+  const response = await fetch(screenshot.dataUrl);
+  const blob = await response.blob();
+  return new File([blob], screenshot.filename, {
+    type: screenshot.mimeType || blob.type || 'application/octet-stream',
+  });
+}
+
 function dataUrlToBlob(dataUrl: string, fallbackMimeType: string): Blob {
   const [header = '', body = ''] = dataUrl.split(',');
   const mimeType = header.match(/^data:([^;,]+)/)?.[1] ?? fallbackMimeType;

@@ -6,6 +6,7 @@ import {
   dropFilesOnElement,
   elementText,
   incomingScreenshotToFile,
+  incomingScreenshotToFileViaFetch,
   isDisabledElement,
   pasteFilesIntoElement,
   setElementText,
@@ -21,7 +22,7 @@ import {
 } from './selectors';
 
 const CHATGPT_UPLOAD_BATCH_SIZE = 2;
-const CHATGPT_UPLOAD_BATCH_DELAY_MS = 2200;
+const CHATGPT_UPLOAD_BATCH_DELAY_MS = 1000;
 const CHATGPT_BATCH_UPLOAD_TIMEOUT_MS = 45000;
 const CHATGPT_UPLOAD_FALLBACK_SETTLE_MS = 1600;
 
@@ -48,7 +49,7 @@ export class ChatGptAdapter implements ProviderAdapter {
   async prepareFiles(screenshots: IncomingScreenshot[]): Promise<File[]> {
     const files: File[] = [];
     for (const screenshot of screenshots) {
-      files.push(await incomingScreenshotToFile(screenshot));
+      files.push(await incomingScreenshotToFileForChatGpt(screenshot));
       await delay(0);
     }
     return files;
@@ -64,12 +65,15 @@ export class ChatGptAdapter implements ProviderAdapter {
     const composer = this.composer ?? await this.waitForComposer(15000);
     this.attachmentUiBaseline = this.countAttachmentUi();
 
-    for (const batch of chatGptUploadBatches(files)) {
+    const batches = chatGptUploadBatches(files);
+    for (const [index, batch] of batches.entries()) {
       await this.attachFileBatch(composer, batch);
       const nextAttachedCount = this.attachedCount + batch.length;
       await this.waitForUploadedAttachments(nextAttachedCount, CHATGPT_BATCH_UPLOAD_TIMEOUT_MS);
       this.attachedCount = nextAttachedCount;
-      await delay(CHATGPT_UPLOAD_BATCH_DELAY_MS);
+      if (index < batches.length - 1) {
+        await delay(CHATGPT_UPLOAD_BATCH_DELAY_MS);
+      }
     }
 
     this.composer = null;
@@ -185,9 +189,13 @@ export class ChatGptAdapter implements ProviderAdapter {
 
   private async waitForUploadedAttachments(expectedCount: number, timeoutMs: number): Promise<boolean> {
     const started = Date.now();
+    let attempts = 0;
     while (Date.now() - started < timeoutMs) {
+      attempts += 1;
       const uploadedCount = this.countNewAttachmentUi();
-      logChatGptAdapter('waiting attachments', { expectedCount, uploadedCount });
+      if (attempts === 1 || attempts % 5 === 0 || uploadedCount >= expectedCount) {
+        logChatGptAdapter('waiting attachments', { expectedCount, uploadedCount, attempts });
+      }
       if (uploadedCount >= expectedCount) return true;
       await delay(500);
     }
@@ -212,6 +220,18 @@ export const chatGptAdapter = new ChatGptAdapter();
 
 function normalizeText(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+async function incomingScreenshotToFileForChatGpt(screenshot: IncomingScreenshot): Promise<File> {
+  try {
+    return await incomingScreenshotToFileViaFetch(screenshot);
+  } catch (error) {
+    logChatGptAdapter('async file decode failed, using fallback', {
+      filename: screenshot.filename,
+      error: String(error),
+    });
+    return incomingScreenshotToFile(screenshot);
+  }
 }
 
 function chatGptUploadBatches(files: File[]): File[][] {

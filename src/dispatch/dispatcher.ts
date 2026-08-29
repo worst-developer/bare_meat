@@ -227,7 +227,7 @@ function toIncomingCoinglassScreenshot(image: CoinglassScreenshotImage): Incomin
 function toIncomingCoinglassJsonFile(snapshot: CoinglassSnapshot): IncomingScreenshot {
   const id = `coinglass-${snapshot.id}`;
   const filename = sanitizeFilename(`coinglass_context_${snapshot.symbols.join('_')}_${snapshot.id}.json`);
-  const json = JSON.stringify(serializeCoinglassSnapshotForFile(snapshot), null, 2);
+  const json = JSON.stringify(serializeCoinglassSnapshotForFile(snapshot));
   return {
     meta: {
       id,
