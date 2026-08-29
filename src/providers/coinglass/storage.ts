@@ -41,11 +41,21 @@ export async function loadCoinglassScreenshotDataUrl(id: string, mimeType: strin
 async function loadStoredCoinglassSnapshot(): Promise<StoredCoinglassSnapshot | null> {
   const result = await chrome.storage.local.get([COINGLASS_STORAGE_KEYS.snapshot]);
   const snapshot = result[COINGLASS_STORAGE_KEYS.snapshot];
-  return isCoinglassSnapshot(snapshot) ? snapshot : null;
+  return isCoinglassSnapshot(snapshot) ? sanitizeStoredSnapshot(snapshot) : null;
 }
 
 function isCoinglassSnapshot(value: unknown): value is StoredCoinglassSnapshot {
   return Boolean(value && typeof value === 'object' && 'capturedAt' in value && 'data' in value);
+}
+
+function sanitizeStoredSnapshot(snapshot: StoredCoinglassSnapshot): StoredCoinglassSnapshot {
+  return {
+    ...snapshot,
+    screenshots: snapshot.screenshots?.map((screenshot) => {
+      const { dataUrl: _dataUrl, ...storedScreenshot } = screenshot as StoredCoinglassScreenshotImage & { dataUrl?: string };
+      return storedScreenshot;
+    }),
+  };
 }
 
 async function deleteStoredScreenshotBlobs(screenshots: StoredCoinglassScreenshotImage[] | undefined): Promise<void> {

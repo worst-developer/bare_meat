@@ -118,21 +118,21 @@ export default function SidePanelApp(): JSX.Element {
     };
   }, [screenshots]);
 
-  async function loadState(): Promise<void> {
-    try {
-      await Promise.all([
-        loadScreenshots(),
-        loadAdditionalPrompt(),
-        loadAutosubmit(),
-        loadIncludeScrapedData(),
-        loadCoinglassState(),
-        loadChatTargets(),
-        loadPromptSettings(),
-      ]);
-    } finally {
-      setLoading(false);
-    }
-  }
+	  async function loadState(): Promise<void> {
+	    try {
+	      await Promise.all([
+	        safeLoad(loadScreenshots),
+	        safeLoad(loadAdditionalPrompt),
+	        safeLoad(loadAutosubmit),
+	        safeLoad(loadIncludeScrapedData),
+	        safeLoad(loadCoinglassState),
+	        safeLoad(loadChatTargets),
+	        safeLoad(loadPromptSettings),
+	      ]);
+	    } finally {
+	      setLoading(false);
+	    }
+	  }
 
   async function loadScreenshots(): Promise<void> {
     const records = await db.listScreenshots();
@@ -179,13 +179,20 @@ export default function SidePanelApp(): JSX.Element {
       COINGLASS_STORAGE_KEYS.manualSymbols,
     ]);
     setIncludeCoinglassData(result[COINGLASS_STORAGE_KEYS.include] === true);
-    setCoinglassSettings(mergeCoinglassSettings(result[COINGLASS_STORAGE_KEYS.settings]));
-    setCoinglassScreenshotSettings(mergeCoinglassScreenshotSettings(result[COINGLASS_STORAGE_KEYS.screenshotSettings]));
-    setManualCoinglassSymbols(normalizeCoinglassSymbols(result[COINGLASS_STORAGE_KEYS.manualSymbols]));
-    const snapshot = await loadCoinglassSnapshot();
-    setCoinglassSnapshot(snapshot);
-    setCoinglassState(snapshot?.status === 'partial' ? 'partial' : snapshot?.status === 'success' ? 'success' : snapshot?.status === 'error' ? 'error' : 'idle');
-  }
+	    setCoinglassSettings(mergeCoinglassSettings(result[COINGLASS_STORAGE_KEYS.settings]));
+	    setCoinglassScreenshotSettings(mergeCoinglassScreenshotSettings(result[COINGLASS_STORAGE_KEYS.screenshotSettings]));
+	    setManualCoinglassSymbols(normalizeCoinglassSymbols(result[COINGLASS_STORAGE_KEYS.manualSymbols]));
+	    void loadCoinglassSnapshot()
+	      .then((snapshot) => {
+	        setCoinglassSnapshot(snapshot);
+	        setCoinglassState(snapshot?.status === 'partial' ? 'partial' : snapshot?.status === 'success' ? 'success' : snapshot?.status === 'error' ? 'error' : 'idle');
+	      })
+	      .catch((error) => {
+	        console.error('[bare meat] Failed to load Coinglass snapshot:', error);
+	        setCoinglassSnapshot(null);
+	        setCoinglassState('idle');
+	      });
+	  }
 
   async function loadChatTargets(): Promise<void> {
     const result = await chrome.storage.local.get(['chat_targets']);
@@ -945,6 +952,14 @@ function CoinglassSnapshotPreview({ snapshot }: { snapshot: CoinglassSnapshot | 
       </div>
     </details>
   );
+}
+
+async function safeLoad(load: () => Promise<void>): Promise<void> {
+  try {
+    await load();
+  } catch (error) {
+    console.error('[bare meat] Side panel load failed:', error);
+  }
 }
 
 function TelemetryStatusList({
