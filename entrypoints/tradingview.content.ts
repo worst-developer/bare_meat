@@ -117,7 +117,10 @@ async function handleTradingViewScreenshotTrigger(): Promise<void> {
     symbol.normalized,
     timeframe.normalized,
     SHORTCUT_DATA_WINDOW_TIMEOUT_MS
-  );
+  ).catch((error) => {
+    console.warn('[bare meat🧸🥩] CTX telemetry scrape failed before screenshot capture:', error);
+    return null;
+  });
   if (telemetry) {
     telemetry.quoteCurrency = detectQuoteCurrency(symbol.normalized);
     console.log(`[bare meat🧸🥩] CTX telemetry ${telemetry.valid ? 'valid' : 'invalid'} (${Object.keys(telemetry.metrics).length} metrics)`);

@@ -63,7 +63,7 @@ async function handleRuntimeMessage(
   try {
     if (message.type === 'TV_CAPTURE_TRIGGERED') {
       const capture = message.capture;
-      const tabId = sender.tab?.id ?? capture.sourceTabId ?? -1;
+      const tabId = sender.tab?.id ?? capture.sourceTabId ?? await activeTradingViewTabId();
       const pendingCapture = captureQueue.addToQueue(capture.symbol, capture.timeframe, tabId, capture.telemetry);
 
       console.log(`[bare meat🧸🥩] queued ${pendingCapture.symbol.normalized} ${pendingCapture.timeframe.normalized}`);
@@ -125,6 +125,11 @@ function isTradingViewUrl(url: string | undefined): boolean {
   } catch {
     return false;
   }
+}
+
+async function activeTradingViewTabId(): Promise<number> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab?.id && isTradingViewUrl(tab.url) ? tab.id : -1;
 }
 
 async function scrapeCoinglass(request: CoinglassScrapeRequest): Promise<void> {
