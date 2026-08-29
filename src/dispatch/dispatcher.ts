@@ -10,6 +10,7 @@ import type {
 } from '../types';
 import type { ExtensionMessage } from '../messaging/protocol';
 import { buildAnalysisPrompt } from '../prompts/prompt-builder';
+import { loadCoinglassScreenshotDataUrl } from '../providers/coinglass/storage';
 import { resolveMatchingTargets } from '../routing/target-resolver';
 import { normalizeChatUrl } from '../routing/url-normalizer';
 import { sanitizeFilename } from '../utils/symbols';
@@ -40,7 +41,7 @@ export async function dispatchRequest(
   );
   const incomingScreenshots = [
     ...await Promise.all(screenshots.map(toIncomingScreenshot)),
-    ...coinglassScreenshots.map(toIncomingCoinglassScreenshot),
+    ...await Promise.all(coinglassScreenshots.map(toIncomingCoinglassScreenshot)),
     ...(message.includeCoinglassData && message.coinglassSnapshot ? [toIncomingCoinglassJsonFile(message.coinglassSnapshot)] : []),
   ];
   console.log('[bare meat🧸🥩][dispatch] request', {
@@ -203,7 +204,10 @@ async function toIncomingScreenshot(meta: ScreenshotMeta): Promise<IncomingScree
   };
 }
 
-function toIncomingCoinglassScreenshot(image: CoinglassScreenshotImage): IncomingScreenshot {
+async function toIncomingCoinglassScreenshot(image: CoinglassScreenshotImage): Promise<IncomingScreenshot> {
+  const dataUrl = image.dataUrl || await loadCoinglassScreenshotDataUrl(image.id, image.mimeType);
+  if (!dataUrl) throw new Error(`Missing Coinglass screenshot data for ${image.filename}`);
+
   const meta: ScreenshotMeta = {
     id: image.id,
     key: `coinglass::${image.kind}::${image.symbol}::${image.timeframe}::${image.id}`,
@@ -220,7 +224,7 @@ function toIncomingCoinglassScreenshot(image: CoinglassScreenshotImage): Incomin
     meta,
     filename: sanitizeFilename(image.filename),
     mimeType: image.mimeType,
-    dataUrl: image.dataUrl,
+    dataUrl,
   };
 }
 

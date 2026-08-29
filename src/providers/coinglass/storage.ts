@@ -16,7 +16,9 @@ export async function clearStoredCoinglassSnapshot(): Promise<void> {
 export async function saveCoinglassSnapshot(snapshot: CoinglassSnapshot): Promise<void> {
   await deleteStoredScreenshotBlobs((await loadStoredCoinglassSnapshot())?.screenshots);
   for (const screenshot of snapshot.screenshots ?? []) {
-    await db.saveBlob(coinglassScreenshotBlobId(screenshot.id), dataUrlToBlob(screenshot.dataUrl, screenshot.mimeType));
+    if (screenshot.dataUrl) {
+      await db.saveBlob(coinglassScreenshotBlobId(screenshot.id), dataUrlToBlob(screenshot.dataUrl, screenshot.mimeType));
+    }
   }
 
   const storedSnapshot = {
@@ -28,23 +30,12 @@ export async function saveCoinglassSnapshot(snapshot: CoinglassSnapshot): Promis
 
 export async function loadCoinglassSnapshot(): Promise<CoinglassSnapshot | null> {
   const snapshot = await loadStoredCoinglassSnapshot();
-  if (!snapshot) return null;
+  return snapshot ? { ...snapshot, screenshots: snapshot.screenshots ?? [] } : null;
+}
 
-  const screenshots = await Promise.all(
-    (snapshot.screenshots ?? []).map(async (screenshot) => {
-      const blob = await db.getBlob(coinglassScreenshotBlobId(screenshot.id));
-      if (!blob) return null;
-      return {
-        ...screenshot,
-        dataUrl: await blobToDataUrl(blob),
-      } satisfies CoinglassScreenshotImage;
-    })
-  );
-
-  return {
-    ...snapshot,
-    screenshots: screenshots.filter((screenshot): screenshot is CoinglassScreenshotImage => Boolean(screenshot)),
-  };
+export async function loadCoinglassScreenshotDataUrl(id: string, mimeType: string): Promise<string | null> {
+  const blob = await db.getBlob(coinglassScreenshotBlobId(id));
+  return blob ? blobToDataUrl(blob, mimeType) : null;
 }
 
 async function loadStoredCoinglassSnapshot(): Promise<StoredCoinglassSnapshot | null> {
@@ -82,11 +73,11 @@ function dataUrlToBlob(dataUrl: string, fallbackMimeType: string): Blob {
   return new Blob([decodeURIComponent(body)], { type: mimeType });
 }
 
-async function blobToDataUrl(blob: Blob): Promise<string> {
+async function blobToDataUrl(blob: Blob, fallbackMimeType: string): Promise<string> {
   const bytes = new Uint8Array(await blob.arrayBuffer());
   let binary = '';
   for (const byte of bytes) {
     binary += String.fromCharCode(byte);
   }
-  return `data:${blob.type || 'image/png'};base64,${btoa(binary)}`;
+  return `data:${blob.type || fallbackMimeType};base64,${btoa(binary)}`;
 }

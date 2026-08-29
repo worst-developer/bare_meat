@@ -29,7 +29,7 @@ export interface CoinglassScreenshotImage {
   id: string;
   filename: string;
   mimeType: string;
-  dataUrl: string;
+  dataUrl?: string;
   symbol: CoinglassSymbol;
   timeframe: CoinglassHeatmapTimeframe;
   kind: 'liquidationHeatmap' | 'liquidationMapChart1' | 'liquidationMapChart2';

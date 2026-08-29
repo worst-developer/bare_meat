@@ -825,9 +825,13 @@ export default function SidePanelApp(): JSX.Element {
                                 <span>{screenshot.symbol} {screenshot.timeframe}</span>
                                 <span className="screenshot-card__kind">{formatCoinglassScreenshotKind(screenshot.kind)}</span>
                               </div>
-                              <a href={screenshot.dataUrl} target="_blank" rel="noreferrer">
-                                <img className="screenshot-card__image" src={screenshot.dataUrl} alt={`${screenshot.symbol} ${screenshot.timeframe} ${screenshot.title}`} />
-                              </a>
+                              {screenshot.dataUrl ? (
+                                <a href={screenshot.dataUrl} target="_blank" rel="noreferrer">
+                                  <img className="screenshot-card__image" src={screenshot.dataUrl} alt={`${screenshot.symbol} ${screenshot.timeframe} ${screenshot.title}`} />
+                                </a>
+                              ) : (
+                                <div className="screenshot-card__placeholder" />
+                              )}
                               <div className="screenshot-card__time">{screenshot.title}</div>
                             </div>
                           ))}
