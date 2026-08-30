@@ -21,8 +21,8 @@ import {
   CHATGPT_SEND_SELECTORS,
 } from './selectors';
 
-const CHATGPT_UPLOAD_BATCH_SIZE = 2;
-const CHATGPT_UPLOAD_BATCH_DELAY_MS = 1000;
+const CHATGPT_UPLOAD_BATCH_SIZE = 20;
+const CHATGPT_UPLOAD_BATCH_DELAY_MS = 800;
 const CHATGPT_BATCH_UPLOAD_TIMEOUT_MS = 45000;
 const CHATGPT_UPLOAD_FALLBACK_SETTLE_MS = 1600;
 
@@ -57,8 +57,8 @@ export class ChatGptAdapter implements ProviderAdapter {
 
   async attachFiles(files: File[]): Promise<void> {
     this.expectedAttachmentCount = files.length;
+    this.attachedCount = 0;
     if (files.length === 0) {
-      this.attachedCount = 0;
       return;
     }
 
@@ -81,7 +81,11 @@ export class ChatGptAdapter implements ProviderAdapter {
 
   async setPrompt(prompt: string): Promise<void> {
     const composer = this.composer ?? await this.waitForComposer(15000);
-    setElementText(composer, prompt);
+    setChatGptPromptText(composer, prompt);
+    await delay(0);
+    if (normalizeText(elementText(composer)).length === 0) {
+      setElementText(composer, prompt);
+    }
   }
 
   async verifyAttachments(expectedCount: number): Promise<boolean> {
@@ -145,6 +149,7 @@ export class ChatGptAdapter implements ProviderAdapter {
   private async attachFileBatch(composer: HTMLElement, files: File[]): Promise<void> {
     const input = this.findCompatibleFileInput(files);
     if (input) {
+      resetFileInput(input);
       attachFilesToInput(input, files);
       return;
     }
@@ -153,6 +158,7 @@ export class ChatGptAdapter implements ProviderAdapter {
     await delay(500);
     const menuInput = this.findCompatibleFileInput(files) ?? this.findFileInput();
     if (menuInput) {
+      resetFileInput(menuInput);
       attachFilesToInput(menuInput, files);
       return;
     }
@@ -235,12 +241,7 @@ async function incomingScreenshotToFileForChatGpt(screenshot: IncomingScreenshot
 }
 
 function chatGptUploadBatches(files: File[]): File[][] {
-  const imageFiles = files.filter((file) => file.type.startsWith('image/'));
-  const otherFiles = files.filter((file) => !file.type.startsWith('image/'));
-  return [
-    ...chunkFiles(imageFiles, CHATGPT_UPLOAD_BATCH_SIZE),
-    ...chunkFiles(otherFiles, 1),
-  ];
+  return chunkFiles(files, CHATGPT_UPLOAD_BATCH_SIZE);
 }
 
 function chunkFiles(files: File[], size: number): File[][] {
@@ -260,6 +261,32 @@ function fileInputAccepts(input: HTMLInputElement, file: File): boolean {
     || (part.endsWith('/*') && file.type.toLowerCase().startsWith(part.slice(0, -1)))
     || (part.startsWith('.') && file.name.toLowerCase().endsWith(part))
   ));
+}
+
+function resetFileInput(input: HTMLInputElement): void {
+  try {
+    input.value = '';
+  } catch {
+    // Some framework-owned inputs reject direct value writes.
+  }
+}
+
+function setChatGptPromptText(element: HTMLElement, text: string): void {
+  if (element instanceof HTMLTextAreaElement) {
+    setElementText(element, text);
+    return;
+  }
+
+  element.focus();
+  const selection = window.getSelection?.();
+  selection?.removeAllRanges();
+  element.textContent = text;
+  element.dispatchEvent(new InputEvent('input', {
+    bubbles: true,
+    cancelable: true,
+    inputType: 'insertText',
+  }));
+  element.dispatchEvent(new Event('change', { bubbles: true }));
 }
 
 function logChatGptAdapter(message: string, data?: unknown): void {
