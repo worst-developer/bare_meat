@@ -454,6 +454,17 @@ summary:focus-visible,
   gap: 0.5rem;
 }
 
+.tv-preset-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.tv-preset-option {
+  justify-content: flex-start;
+  padding-inline: 0.75rem;
+}
+
 .symbol-option,
 .timeframe-option {
   display: flex;
@@ -530,6 +541,10 @@ summary:focus-visible,
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.5rem;
+}
+
+.timeframe-options--settings {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .scrape-button {
@@ -1112,6 +1127,7 @@ summary:focus-visible,
 }
 
 .settings-section,
+.settings-stack,
 .settings-target-list,
 .chat-target-form,
 .prompt-editor,

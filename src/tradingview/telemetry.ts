@@ -36,6 +36,22 @@ export async function scrapeTradingViewTelemetryWithDataWindow(
   return null;
 }
 
+export async function closeTradingViewDataWindow(): Promise<boolean> {
+  if (!findDataWindowTab()) return true;
+
+  const launcher = findDataWindowLauncher();
+  if (!launcher) return false;
+
+  launcher.click();
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 2500) {
+    if (!findDataWindowTab()) return true;
+    await delay(100);
+  }
+
+  return false;
+}
+
 async function openDataWindowTab(): Promise<void> {
   let tab = findDataWindowTab();
   if (!tab) {
@@ -316,6 +332,9 @@ function normalizedText(value: string): string {
 }
 
 function findDataWindowControl(): HTMLElement | null {
+  const launcher = findDataWindowLauncher();
+  if (launcher) return launcher;
+
   const controls = document.querySelectorAll<HTMLElement>('button, [role="button"], [aria-label], [title], [data-tooltip]');
   for (const control of controls) {
     const description = [
@@ -324,6 +343,25 @@ function findDataWindowControl(): HTMLElement | null {
       control.getAttribute('data-tooltip'),
       control.getAttribute('data-name'),
       control.textContent,
+    ].filter(Boolean).join(' ');
+
+    if (/object tree|data window/i.test(description)) return control;
+  }
+
+  return null;
+}
+
+function findDataWindowLauncher(): HTMLElement | null {
+  const controls = document.querySelectorAll<HTMLElement>('button, [role="button"], [aria-label], [title], [data-tooltip], [data-name]');
+  for (const control of controls) {
+    if (!isVisible(control)) continue;
+    const visibleText = normalizedText(control.innerText || control.textContent || '').toLowerCase();
+    if (visibleText === 'data window' || visibleText === 'object tree') continue;
+    const description = [
+      control.getAttribute('aria-label'),
+      control.getAttribute('title'),
+      control.getAttribute('data-tooltip'),
+      control.getAttribute('data-name'),
     ].filter(Boolean).join(' ');
 
     if (/object tree|data window/i.test(description)) return control;

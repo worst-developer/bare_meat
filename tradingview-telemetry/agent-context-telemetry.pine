@@ -66,7 +66,6 @@ movingAverageColor = input.color(color.rgb(229, 57, 53), "MA line color", group=
 levelVisualColor = input.color(color.black, "Level line color", group=groupVisual, display=display.none)
 zoneHistory = input.int(16, "Zone history", minval=3, maxval=30, group=groupVisual, display=display.none)
 blockLookback = input.int(12, "Order block search bars", minval=3, maxval=30, group=groupVisual, display=display.none)
-showDashboard = input.bool(true, "Show context dashboard", group=groupVisual, display=display.none)
 asiaColor = input.color(color.rgb(66, 165, 245), "Asia color", group=groupVisual, display=display.none)
 frankfurtColor = input.color(color.rgb(171, 71, 188), "Frankfurt color", group=groupVisual, display=display.none)
 londonColor = input.color(color.rgb(38, 166, 154), "London color", group=groupVisual, display=display.none)
@@ -133,12 +132,13 @@ trimLabels(array<label> labels, int limit) =>
 levelLine(line currentLine, float value, int startIndex, color lineColor, string lineStyle, int lineWidth) =>
     result = currentLine
     if not na(value)
-        safeStart = math.min(bar_index, math.max(startIndex, bar_index - 450))
+        safeStart = math.max(0, math.min(bar_index - 1, math.max(startIndex, bar_index - 450)))
+        safeEnd = bar_index + 1
         if na(result)
-            result := line.new(safeStart, value, bar_index, value, extend=extend.right, color=lineColor, style=lineStyle, width=lineWidth)
+            result := line.new(safeStart, value, safeEnd, value, extend=extend.right, color=lineColor, style=lineStyle, width=lineWidth)
         else
             line.set_xy1(result, safeStart, value)
-            line.set_xy2(result, bar_index, value)
+            line.set_xy2(result, safeEnd, value)
             line.set_color(result, lineColor)
             line.set_style(result, lineStyle)
             line.set_width(result, lineWidth)
@@ -154,7 +154,7 @@ reserveLabelXOffset(float value, float minimumDistance, array<float> usedValues)
             for index = 0 to array.size(usedValues) - 1
                 usedValue = array.get(usedValues, index)
                 if math.abs(value - usedValue) < minimumDistance
-                    result += 12
+                    result += 5
         array.push(usedValues, value)
     result
 
@@ -841,7 +841,7 @@ dayStartBar = nz(ta.valuewhen(timeframe.change("D"), bar_index, 0), bar_index - 
 weekStartBar = nz(ta.valuewhen(timeframe.change("W"), bar_index, 0), bar_index - 1)
 monthStartBar = nz(ta.valuewhen(timeframe.change("M"), bar_index, 0), bar_index - 1)
 profileStartBar = math.max(0, bar_index - profileLookback + 1)
-labelPadding = math.max(math.max(atr * 0.6, close * 0.008), syminfo.mintick * 500)
+labelPadding = math.max(math.max(atr * 0.25, close * 0.0025), syminfo.mintick * 25)
 if barstate.islast
     array.clear(labelSlots)
     array.clear(movingAverageLabelSlots)
@@ -905,31 +905,6 @@ if barstate.islast
         ema100Tag := levelTag(ema100Tag, na, 0, "EMA 100", movingAverageColor)
         ema200Tag := levelTag(ema200Tag, na, 0, "EMA 200", movingAverageColor)
         sma200Tag := levelTag(sma200Tag, na, 0, "SMA 200", movingAverageColor)
-
-var table dashboard = table.new(position.top_right, 2, 10, border_width=1, border_color=color.new(color.gray, 70), bgcolor=color.new(color.black, 18))
-if barstate.islast and showDashboard
-    activeSessionName = inNy ? "New York" : inLondon ? "London" : inFrankfurt ? "Frankfurt" : inAsia ? "Asia" : "None"
-    structureName = structureState == 2 ? "Strong bullish" : structureState == 1 ? "Bullish" : structureState == -2 ? "Strong bearish" : structureState == -1 ? "Bearish" : "Range"
-    table.cell(dashboard, 0, 0, "Market context", text_color=color.white, bgcolor=color.new(color.blue, 55))
-    table.cell(dashboard, 1, 0, syminfo.ticker, text_color=color.white, bgcolor=color.new(color.blue, 55))
-    table.cell(dashboard, 0, 1, "Session", text_color=color.silver)
-    table.cell(dashboard, 1, 1, activeSessionName, text_color=color.white)
-    table.cell(dashboard, 0, 2, "ATR %", text_color=color.silver)
-    table.cell(dashboard, 1, 2, numberText(atrPct, "#.##"), text_color=color.white)
-    table.cell(dashboard, 0, 3, "RVOL", text_color=color.silver)
-    table.cell(dashboard, 1, 3, numberText(rvol, "#.##"), text_color=color.white)
-    table.cell(dashboard, 0, 4, "Day range used", text_color=color.silver)
-    table.cell(dashboard, 1, 4, na(dayRangeUsedPct) ? "-" : numberText(dayRangeUsedPct, "#.0") + "%", text_color=color.white)
-    table.cell(dashboard, 0, 5, "Session range", text_color=color.silver)
-    table.cell(dashboard, 1, 5, na(sessionRangeUsedPct) ? "-" : numberText(sessionRangeUsedPct, "#.0") + "%", text_color=color.white)
-    table.cell(dashboard, 0, 6, "Daily VWAP", text_color=color.silver)
-    table.cell(dashboard, 1, 6, str.tostring(dayVwap, format.mintick), text_color=color.yellow)
-    table.cell(dashboard, 0, 7, "Profile POC (approx)", text_color=color.silver)
-    table.cell(dashboard, 1, 7, exportApproximateProfile ? str.tostring(profilePoc, format.mintick) : "Disabled", text_color=exportApproximateProfile ? color.orange : color.silver)
-    table.cell(dashboard, 0, 8, "Bar return", text_color=color.silver)
-    table.cell(dashboard, 1, 8, na(barReturnPct) ? "-" : numberText(barReturnPct, "#.##") + "%", text_color=barReturnPct > 0 ? color.green : barReturnPct < 0 ? color.red : color.silver)
-    table.cell(dashboard, 0, 9, "PDH / PDL dist", text_color=color.silver)
-    table.cell(dashboard, 1, 9, str.tostring(distancePct(prevDailyHigh), "#.##") + "% / " + str.tostring(distancePct(prevDailyLow), "#.##") + "%", text_color=color.white)
 
 plot(showLongMovingAverages ? ema100 : na, "EMA 100", color=movingAverageColor, linewidth=2, display=display.all - display.status_line)
 plot(showLongMovingAverages ? ema200 : na, "EMA 200", color=movingAverageColor, linewidth=2, display=display.all - display.status_line)

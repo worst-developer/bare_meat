@@ -2,11 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import SettingsModal from './components/SettingsModal';
 import { SOURCE_LOGOS, logoForProvider, providerLogoNeedsBackplate } from './logos';
 import type { ExtensionMessage } from '../../src/messaging/protocol';
-import type { ChatTarget, CoinglassHeatmapTimeframe, CoinglassScreenshotSettings, CoinglassSection, CoinglassSettings, CoinglassSnapshot, CoinglassSymbol, PromptSettings, ScreenshotMeta, TradingViewTelemetrySnapshot } from '../../src/types';
+import type { ChatTarget, CoinglassHeatmapTimeframe, CoinglassScreenshotSettings, CoinglassSection, CoinglassSettings, CoinglassSnapshot, CoinglassSymbol, PromptSettings, ScreenshotMeta, TradingViewAutoCaptureResult, TradingViewChartPreset, TradingViewTelemetrySnapshot } from '../../src/types';
 import { COINGLASS_SYMBOLS } from '../../src/types';
 import * as db from '../../src/storage/db';
 import { COINGLASS_STORAGE_KEYS, DEFAULT_COINGLASS_SCREENSHOT_SETTINGS, DEFAULT_COINGLASS_SETTINGS, enabledCoinglassSections, mergeCoinglassScreenshotSettings, mergeCoinglassSettings } from '../../src/providers/coinglass/config';
 import { loadCoinglassSnapshot } from '../../src/providers/coinglass/storage';
+import { TRADINGVIEW_AUTO_STORAGE_KEY, enabledTradingViewTimeframes, mergeTradingViewAutoSettings } from '../../src/tradingview/auto-capture';
 import { isTradingViewScreenshot, validateTelemetryIntegrity, type TelemetryIntegrityResult } from '../../src/tradingview/telemetry-integrity';
 import { resolveMatchingTargets } from '../../src/routing/target-resolver';
 import { formatDuration, marketSessionStatuses, nextFourHourCandleClose } from '../../src/tradingview/session-clock';
@@ -45,6 +46,9 @@ export default function SidePanelApp(): JSX.Element {
   const [coinglassState, setCoinglassState] = useState<'idle' | 'scraping' | 'success' | 'partial' | 'error'>('idle');
   const [coinglassMessage, setCoinglassMessage] = useState('');
   const [manualCoinglassSymbols, setManualCoinglassSymbols] = useState<CoinglassSymbol[]>(['BTC']);
+  const [tradingViewPresets, setTradingViewPresets] = useState<TradingViewChartPreset[]>([]);
+  const [tradingViewAutoState, setTradingViewAutoState] = useState<'idle' | 'capturing' | 'success' | 'error'>('idle');
+  const [tradingViewAutoMessage, setTradingViewAutoMessage] = useState('');
   const [telemetryScrapeState, setTelemetryScrapeState] = useState<'idle' | 'scraping' | 'success' | 'warning' | 'error'>('idle');
   const [telemetryScrapeMessage, setTelemetryScrapeMessage] = useState('');
   const [manualTelemetryPreview, setManualTelemetryPreview] = useState<TradingViewTelemetrySnapshot | null>(null);
@@ -69,6 +73,17 @@ export default function SidePanelApp(): JSX.Element {
         setCoinglassSnapshot(message.snapshot);
         setCoinglassState(message.snapshot.status === 'partial' ? 'partial' : message.snapshot.status === 'success' ? 'success' : 'error');
         setCoinglassMessage(coinglassSummaryMessage(message.snapshot));
+      }
+
+      if (message.type === 'TV_AUTO_CAPTURE_PROGRESS') {
+        setTradingViewAutoState('capturing');
+        setTradingViewAutoMessage(message.progress.message);
+      }
+
+      if (message.type === 'TV_AUTO_CAPTURE_COMPLETE' || message.type === 'TV_AUTO_CAPTURE_FAILED') {
+        setTradingViewAutoState(message.result.captured > 0 ? 'success' : 'error');
+        setTradingViewAutoMessage(tradingViewAutoSummaryMessage(message.result));
+        void loadScreenshots();
       }
     };
 
@@ -125,9 +140,10 @@ export default function SidePanelApp(): JSX.Element {
 	        safeLoad(loadAdditionalPrompt),
 	        safeLoad(loadAutosubmit),
 	        safeLoad(loadIncludeScrapedData),
-	        safeLoad(loadCoinglassState),
-	        safeLoad(loadChatTargets),
-	        safeLoad(loadPromptSettings),
+        safeLoad(loadCoinglassState),
+        safeLoad(loadTradingViewAutoState),
+        safeLoad(loadChatTargets),
+        safeLoad(loadPromptSettings),
 	      ]);
 	    } finally {
 	      setLoading(false);
@@ -199,6 +215,13 @@ export default function SidePanelApp(): JSX.Element {
     setChatTargets(Array.isArray(result.chat_targets) ? result.chat_targets : []);
   }
 
+  async function loadTradingViewAutoState(): Promise<void> {
+    const result = await chrome.storage.local.get([TRADINGVIEW_AUTO_STORAGE_KEY]);
+    const settings = mergeTradingViewAutoSettings(result[TRADINGVIEW_AUTO_STORAGE_KEY]);
+    setTradingViewPresets(settings.presets);
+    await chrome.storage.local.set({ [TRADINGVIEW_AUTO_STORAGE_KEY]: settings });
+  }
+
   async function loadPromptSettings(): Promise<void> {
     const result = await chrome.storage.local.get(['prompt_settings']);
     if (result.prompt_settings?.basePrompt) {
@@ -219,6 +242,9 @@ export default function SidePanelApp(): JSX.Element {
   const canDispatchCoinglass = Boolean(coinglassSnapshot && (includeCoinglassData || hasCoinglassScreenshots));
   const coinglassMarketDataEnabled = COINGLASS_MARKET_DATA_SECTIONS.some((section) => coinglassSettings[section]);
   const coinglassHeatmapsEnabled = coinglassScreenshotSettings.liquidationHeatmap || coinglassScreenshotSettings.liquidationMap;
+  const enabledTradingViewPresets = tradingViewPresets.filter((preset) => preset.enabled && enabledTradingViewTimeframes(preset).length > 0);
+  const canAutoCaptureTradingView = includeScrapedData && enabledTradingViewPresets.length > 0;
+  const isDataScraping = tradingViewAutoState === 'capturing' || coinglassState === 'scraping';
 
   async function persistChatTargets(nextTargets: ChatTarget[]): Promise<void> {
     setChatTargets(nextTargets);
@@ -240,6 +266,29 @@ export default function SidePanelApp(): JSX.Element {
 
   async function handleDeleteChatTarget(targetId: string): Promise<void> {
     await persistChatTargets(chatTargets.filter((target) => target.id !== targetId));
+  }
+
+  async function persistTradingViewPresets(nextPresets: TradingViewChartPreset[]): Promise<void> {
+    setTradingViewPresets(nextPresets);
+    await chrome.storage.local.set({ [TRADINGVIEW_AUTO_STORAGE_KEY]: { presets: nextPresets } });
+  }
+
+  async function handleSaveTradingViewPreset(preset: TradingViewChartPreset): Promise<void> {
+    const existingIndex = tradingViewPresets.findIndex((existing) => existing.id === preset.id);
+    const nextPresets = existingIndex >= 0
+      ? tradingViewPresets.map((existing) => existing.id === preset.id ? preset : existing)
+      : [...tradingViewPresets, preset];
+    await persistTradingViewPresets(nextPresets);
+  }
+
+  async function handleToggleTradingViewPreset(presetId: string, enabled: boolean): Promise<void> {
+    await persistTradingViewPresets(tradingViewPresets.map((preset) => (
+      preset.id === presetId ? { ...preset, enabled } : preset
+    )));
+  }
+
+  async function handleDeleteTradingViewPreset(presetId: string): Promise<void> {
+    await persistTradingViewPresets(tradingViewPresets.filter((preset) => preset.id !== presetId));
   }
 
   async function handleAdditionalPromptChange(value: string): Promise<void> {
@@ -344,6 +393,41 @@ export default function SidePanelApp(): JSX.Element {
     } satisfies ExtensionMessage);
   }
 
+  async function handleGetData(): Promise<void> {
+    const shouldScrapeTradingView = includeScrapedData;
+    const shouldScrapeCoinglass = includeCoinglassData;
+
+    if (!shouldScrapeTradingView && !shouldScrapeCoinglass) {
+      setTradingViewAutoState('error');
+      setTradingViewAutoMessage('Enable TradingView context or Coinglass market data first.');
+      return;
+    }
+
+    if (shouldScrapeTradingView) {
+      if (enabledTradingViewPresets.length === 0) {
+        setTradingViewAutoState('error');
+        setTradingViewAutoMessage('Select at least one TradingView chart and timeframe.');
+        return;
+      }
+
+      setTradingViewAutoState('capturing');
+      setTradingViewAutoMessage('Opening TradingView...');
+      try {
+        await runTradingViewAutoCapture(enabledTradingViewPresets);
+        const nextScreenshots = await db.listScreenshots();
+        replaceScreenshots(nextScreenshots);
+      } catch (error) {
+        setTradingViewAutoState('error');
+        setTradingViewAutoMessage(error instanceof Error ? error.message : String(error));
+        if (!shouldScrapeCoinglass) return;
+      }
+    }
+
+    if (shouldScrapeCoinglass) {
+      await handleScrapeCoinglass();
+    }
+  }
+
   async function scrapeActiveTradingViewTelemetry(): Promise<TradingViewTelemetrySnapshot> {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab?.id || !isTradingViewUrl(tab.url)) {
@@ -418,12 +502,15 @@ export default function SidePanelApp(): JSX.Element {
     setCoinglassSnapshot(null);
     setCoinglassState('idle');
     setCoinglassMessage('');
+    setTradingViewAutoState('idle');
+    setTradingViewAutoMessage('');
     await loadScreenshots();
   }
 
   async function handlePrepareChats(): Promise<void> {
-    const canDispatchCoinglassOnly = screenshots.length === 0 && canDispatchCoinglass;
-    if ((!canDispatchCoinglassOnly && screenshots.length === 0) || dispatchTargets.length === 0) return;
+    const selectedAutoPresets = includeScrapedData ? enabledTradingViewPresets : [];
+    const canDispatchCoinglassOnly = screenshots.length === 0 && selectedAutoPresets.length === 0 && canDispatchCoinglass;
+    if ((!canDispatchCoinglassOnly && screenshots.length === 0 && selectedAutoPresets.length === 0) || dispatchTargets.length === 0) return;
     if (includeCoinglassData && !coinglassSnapshot) {
       setCoinglassState('error');
       setCoinglassMessage('Scrape Coinglass before including it in the prompt.');
@@ -432,9 +519,18 @@ export default function SidePanelApp(): JSX.Element {
 
     setIsSubmitting(true);
     try {
+      let dispatchScreenshots = screenshots;
+      if (selectedAutoPresets.length > 0) {
+        setTradingViewAutoState('capturing');
+        setTradingViewAutoMessage('Opening TradingView...');
+        await runTradingViewAutoCapture(selectedAutoPresets);
+        dispatchScreenshots = await db.listScreenshots();
+        replaceScreenshots(dispatchScreenshots);
+      }
+
       let dispatchTelemetry: TradingViewTelemetrySnapshot | undefined;
-      if (includeScrapedData && screenshots.length > 0) {
-        dispatchTelemetry = pickSubmitTelemetry(screenshots, manualTelemetryPreview);
+      if (includeScrapedData && dispatchScreenshots.length > 0) {
+        dispatchTelemetry = pickSubmitTelemetry(dispatchScreenshots, manualTelemetryPreview);
         if (dispatchTelemetry) {
           const metricCount = Object.keys(dispatchTelemetry.metrics).length;
           setTelemetryScrapeState(dispatchTelemetry.quality === 'partial' ? 'warning' : 'success');
@@ -449,7 +545,7 @@ export default function SidePanelApp(): JSX.Element {
 
       await chrome.runtime.sendMessage({
         type: 'DISPATCH_REQUEST',
-        screenshotKeys: screenshots.map((screenshot) => screenshot.key),
+        screenshotKeys: dispatchScreenshots.map((screenshot) => screenshot.key),
         additionalPrompt,
         targetIds: dispatchTargets.map((target) => target.id),
         basePrompt: promptSettings.basePrompt,
@@ -464,6 +560,16 @@ export default function SidePanelApp(): JSX.Element {
       setTelemetryScrapeMessage(error instanceof Error ? error.message : String(error));
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function runTradingViewAutoCapture(presets: TradingViewChartPreset[]): Promise<void> {
+    const result = await chrome.runtime.sendMessage({
+      type: 'TV_AUTO_CAPTURE_REQUEST',
+      request: { presets },
+    } satisfies ExtensionMessage) as { success: boolean; error?: string } | undefined;
+    if (!result?.success) {
+      throw new Error(result?.error || 'TradingView auto capture failed.');
     }
   }
 
@@ -526,6 +632,10 @@ export default function SidePanelApp(): JSX.Element {
         onSaveChatTarget={handleSaveChatTarget}
         onDeleteChatTarget={handleDeleteChatTarget}
         onUpdateChatTarget={handleSaveChatTarget}
+        tradingViewPresets={tradingViewPresets}
+        onSaveTradingViewPreset={handleSaveTradingViewPreset}
+        onDeleteTradingViewPreset={handleDeleteTradingViewPreset}
+        onUpdateTradingViewPreset={handleSaveTradingViewPreset}
       />
 
       <SessionStatusBlock now={now} />
@@ -599,6 +709,51 @@ export default function SidePanelApp(): JSX.Element {
           </section>
 
           <section className="config-section">
+            <div className="section-heading section-heading--status">
+              <div>
+                <h2 className="section-heading__title section-heading__title--logo">
+                  <img className="service-logo-image service-logo-image--backplate" src={SOURCE_LOGOS.tradingView} alt="" aria-hidden="true" />
+                  TradingView charts
+                </h2>
+              </div>
+              {tradingViewAutoState !== 'idle' && (
+                <span className="section-status" title={tradingViewAutoMessage || tradingViewAutoState}>
+                  <span className={`status status-sm ${tradingViewAutoState === 'success' ? 'status-success' : tradingViewAutoState === 'error' ? 'status-error' : 'status-warning'}`} />
+                </span>
+              )}
+            </div>
+
+            {tradingViewPresets.length === 0 ? (
+              <div className="empty-state empty-state--compact">
+                Add TradingView charts in settings.
+              </div>
+            ) : (
+              <div className="tv-preset-options">
+                {tradingViewPresets.map((preset) => (
+                  <label key={preset.id} className="symbol-option tv-preset-option">
+                    <input
+                      className="checkbox checkbox-sm"
+                      type="checkbox"
+                      checked={preset.enabled}
+                      onChange={(event) => void handleToggleTradingViewPreset(preset.id, event.target.checked)}
+                    />
+                    <span>{preset.name}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+
+            {tradingViewAutoMessage && (
+              <div className={`capture-message capture-message--${tradingViewAutoState}`}>
+                <span className="capture-message__icon" aria-hidden="true">
+                  {tradingViewAutoState === 'error' ? 'x' : '✓'}
+                </span>
+                <span>{tradingViewAutoMessage}</span>
+              </div>
+            )}
+          </section>
+
+          <section className="config-section">
             <div className="section-heading">
               <div>
                 <h2 className="section-heading__title">Prompt data</h2>
@@ -634,6 +789,14 @@ export default function SidePanelApp(): JSX.Element {
                 </span>
               </label>
             </div>
+            <button
+              className="btn btn-primary btn-block scrape-button"
+              type="button"
+              disabled={isDataScraping || isSubmitting}
+              onClick={() => void handleGetData()}
+            >
+              {isDataScraping ? 'Wait Data...' : 'Get Data'}
+            </button>
           </section>
 
           <section className="config-section">
@@ -747,14 +910,6 @@ export default function SidePanelApp(): JSX.Element {
               </div>
             </details>
 
-            <button
-              className="btn btn-primary btn-block scrape-button"
-              type="button"
-              disabled={coinglassState === 'scraping' || isSubmitting}
-              onClick={() => void handleScrapeCoinglass()}
-            >
-              {coinglassState === 'scraping' ? 'Wait Coinglass...' : 'Get Coinglass'}
-            </button>
             {coinglassMessage && (
               <div className={`capture-message capture-message--${coinglassState}`}>
                 <span className="capture-message__icon" aria-hidden="true">
@@ -885,7 +1040,7 @@ export default function SidePanelApp(): JSX.Element {
       <section className="config-section action-panel">
         <button
           className="btn btn-primary btn-block action-button--submit"
-          disabled={dispatchTargets.length === 0 || isSubmitting || (screenshots.length === 0 && !canDispatchCoinglass)}
+          disabled={dispatchTargets.length === 0 || isSubmitting || (screenshots.length === 0 && !canAutoCaptureTradingView && !canDispatchCoinglass)}
           onClick={() => void handlePrepareChats()}
         >
           {isSubmitting ? 'Preparing...' : 'Submit'}
@@ -1280,6 +1435,12 @@ function coinglassSummaryMessage(snapshot: CoinglassSnapshot): string {
   if (snapshot.status === 'success') return `Scraped ${symbolCount} symbol(s), ${sectionCount} section(s)${imageText}.`;
   if (snapshot.status === 'partial') return `Scraped with ${snapshot.warnings.length} warning(s)${imageText}.`;
   return snapshot.errors.join('; ') || 'Coinglass scrape failed.';
+}
+
+function tradingViewAutoSummaryMessage(result: TradingViewAutoCaptureResult): string {
+  if (result.errors.length === 0) return `Captured ${result.captured} TradingView screenshot(s).`;
+  if (result.captured > 0) return `Captured ${result.captured} screenshot(s), ${result.errors.length} error(s).`;
+  return result.errors.join('; ') || 'TradingView capture failed.';
 }
 
 function enabledCoinglassHeatmapTimeframes(settings: CoinglassScreenshotSettings): CoinglassHeatmapTimeframe[] {

@@ -5,6 +5,7 @@ import type { ExtensionMessage } from '../src/messaging/protocol';
 import { coinglassLiquidationHeatmapUrl, coinglassLiquidationMapUrl, coinglassUrl, isSectionAvailableForSymbol } from '../src/providers/coinglass/config';
 import { clearStoredCoinglassSnapshot, saveCoinglassSnapshot } from '../src/providers/coinglass/storage';
 import * as db from '../src/storage/db';
+import { enabledTradingViewTimeframes, tradingViewUrlForTimeframe } from '../src/tradingview/auto-capture';
 import type {
   CoinglassHeatmapTimeframe,
   CoinglassScrapeProgress,
@@ -13,8 +14,14 @@ import type {
   CoinglassScreenshotImage,
   CoinglassSnapshot,
   CoinglassSymbol,
+  DetectedInterval,
+  DetectedSymbol,
   PendingCapture,
   ScreenshotMeta,
+  TradingViewAutoCaptureProgress,
+  TradingViewAutoCaptureRequest,
+  TradingViewAutoCaptureResult,
+  TradingViewTelemetrySnapshot,
 } from '../src/types';
 import { buildScreenshotKey, computeHash, generateId } from '../src/utils/symbols';
 
@@ -23,6 +30,8 @@ const CLIPBOARD_IMAGE_WAIT_MS = 6000;
 const COINGLASS_PAGE_DELAY_MS = 1400;
 const COINGLASS_LOAD_DELAY_MS = 2200;
 const COINGLASS_MESSAGE_TIMEOUT_MS = 12000;
+const TRADINGVIEW_LOAD_DELAY_MS = 1800;
+const TRADINGVIEW_MESSAGE_TIMEOUT_MS = 75000;
 
 let offscreenDocumentCreated = false;
 let captureProcessorRunning = false;
@@ -76,6 +85,13 @@ async function handleRuntimeMessage(
       return { success: true };
     }
 
+    if (message.type === 'TV_AUTO_CAPTURE_REQUEST') {
+      const result = await autoCaptureTradingView(message.request);
+      return result.errors.length > 0
+        ? { success: false, error: result.errors.join('; ') }
+        : { success: true };
+    }
+
     if (message.type === 'DISPATCH_REQUEST') {
       void dispatchRequest(message);
       return { success: true };
@@ -112,7 +128,7 @@ async function ensureTradingViewContentScript(tabId: number): Promise<void> {
   if (ready) return;
 
   await chrome.scripting.executeScript({
-    target: { tabId },
+    target: { tabId, allFrames: true },
     files: ['content-scripts/tradingview.js'],
   }).catch(() => {});
   await delay(300);
@@ -196,6 +212,167 @@ async function scrapeCoinglass(request: CoinglassScrapeRequest): Promise<void> {
     snapshot.errors.push(error instanceof Error ? error.message : String(error));
     await emitCoinglassFailed(snapshot);
   }
+}
+
+async function autoCaptureTradingView(request: TradingViewAutoCaptureRequest): Promise<TradingViewAutoCaptureResult> {
+  const result: TradingViewAutoCaptureResult = { captured: 0, errors: [] };
+  const presetGroups = request.presets
+    .map((preset) => ({ preset, timeframes: enabledTradingViewTimeframes(preset) }))
+    .filter((group) => group.timeframes.length > 0);
+  if (presetGroups.length === 0) {
+    result.errors.push('Select at least one TradingView chart and timeframe.');
+    await emitTradingViewAutoFailed(result);
+    return result;
+  }
+
+  const previousActiveTab = await getActiveTab();
+  let tab: chrome.tabs.Tab | null = null;
+
+  try {
+    for (const { preset, timeframes } of presetGroups) {
+      try {
+        tab = await chrome.tabs.create({
+          url: tradingViewUrlForTimeframe(preset.chartUrl, timeframes[0]!),
+          active: true,
+        });
+        if (!tab.id) throw new Error('TradingView automation tab has no id.');
+        await waitForTabComplete(tab.id);
+        await delay(TRADINGVIEW_LOAD_DELAY_MS);
+        await ensureTradingViewContentScript(tab.id);
+
+        for (const timeframe of timeframes) {
+          try {
+            await emitTradingViewAutoProgress({
+              symbol: preset.symbol,
+              timeframe,
+              message: `Preparing ${preset.symbol} ${timeframe}`,
+            });
+
+            const prepared = await sendTradingViewTabMessage(tab.id, {
+              type: 'TV_PREPARE_AUTO_CAPTURE',
+              symbol: preset.symbol,
+              timeframe,
+            }).catch((error) => ({ success: false, error: String(error) }));
+
+            if (!prepared?.success) {
+              throw new Error(prepared?.error ?? `TradingView did not prepare ${preset.symbol} ${timeframe}`);
+            }
+            if (!prepared.telemetry?.valid) {
+              throw new Error(`TradingView CTX is not valid for ${preset.symbol} ${timeframe}`);
+            }
+
+            await emitTradingViewAutoProgress({
+              symbol: prepared.symbol?.display ?? preset.symbol,
+              timeframe,
+              message: `Capturing ${preset.symbol} ${timeframe}`,
+            });
+
+            const screenshot = await captureCurrentTradingViewTab(
+              tab.id,
+              prepared.symbol ?? fallbackSymbol(preset.symbol),
+              prepared.timeframe ?? fallbackInterval(timeframe),
+              prepared.telemetry
+            );
+            await saveTradingViewScreenshot(screenshot);
+            result.captured += 1;
+          } catch (error) {
+            result.errors.push(`${preset.symbol} ${timeframe}: ${error instanceof Error ? error.message : String(error)}`);
+            break;
+          }
+        }
+      } catch (error) {
+        result.errors.push(`${preset.symbol}: ${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        if (tab?.id) await chrome.tabs.remove(tab.id).catch(() => {});
+        tab = null;
+      }
+    }
+  } finally {
+    await restoreActiveTab(previousActiveTab);
+  }
+
+  if (result.captured > 0) {
+    await emitTradingViewAutoComplete(result);
+  } else {
+    await emitTradingViewAutoFailed(result);
+  }
+  return result;
+}
+
+async function captureCurrentTradingViewTab(
+  tabId: number,
+  symbol: DetectedSymbol,
+  timeframe: DetectedInterval,
+  telemetry?: TradingViewTelemetrySnapshot
+): Promise<{ dataUrl: string; hash: string; mimeType: string; symbol: DetectedSymbol; timeframe: DetectedInterval; telemetry?: TradingViewTelemetrySnapshot }> {
+  const tab = await chrome.tabs.get(tabId);
+  if (!tab.windowId) throw new Error('TradingView tab window could not be identified');
+  const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' });
+  const blob = dataUrlToBlob(dataUrl, 'image/png');
+  return {
+    dataUrl,
+    hash: await computeHash(await blob.arrayBuffer()),
+    mimeType: blob.type || 'image/png',
+    symbol,
+    timeframe,
+    telemetry,
+  };
+}
+
+async function saveTradingViewScreenshot(result: {
+  dataUrl: string;
+  hash: string;
+  mimeType: string;
+  symbol: DetectedSymbol;
+  timeframe: DetectedInterval;
+  telemetry?: TradingViewTelemetrySnapshot;
+}): Promise<void> {
+  const imageBlob = dataUrlToBlob(result.dataUrl, result.mimeType);
+  const screenshotMeta = buildTradingViewScreenshotMeta(result.symbol, result.timeframe, result.hash, result.mimeType, result.telemetry);
+  await db.putScreenshotReplacingChart(screenshotMeta, imageBlob);
+  void chrome.runtime.sendMessage({
+    type: 'SCREENSHOT_UPDATE',
+    screenshot: screenshotMeta,
+  } satisfies ExtensionMessage).catch(() => {});
+}
+
+function buildTradingViewScreenshotMeta(
+  symbol: DetectedSymbol,
+  timeframe: DetectedInterval,
+  hash: string,
+  mimeType: string,
+  telemetry?: TradingViewTelemetrySnapshot
+): ScreenshotMeta {
+  return {
+    id: generateId(),
+    key: buildScreenshotKey(symbol.normalized, timeframe.normalized),
+    symbol: symbol.display,
+    normalizedSymbol: symbol.normalized,
+    timeframe: timeframe.normalized,
+    blobId: generateId(),
+    hash,
+    mimeType,
+    capturedAt: Date.now(),
+    rawTradingView: {
+      intervalValue: timeframe.dataValue,
+      intervalTooltip: timeframe.tooltip,
+    },
+    tradingViewTelemetry: telemetry,
+  };
+}
+
+function fallbackSymbol(symbol: string): DetectedSymbol {
+  return {
+    display: symbol,
+    normalized: symbol.trim().replace(/\s+/g, '').toUpperCase(),
+  };
+}
+
+function fallbackInterval(timeframe: string): DetectedInterval {
+  return {
+    normalized: timeframe,
+    visibleText: timeframe,
+  };
 }
 
 function snapshotHasData(snapshot: CoinglassSnapshot): boolean {
@@ -461,6 +638,39 @@ async function emitCoinglassFailed(snapshot: CoinglassSnapshot): Promise<void> {
   } satisfies ExtensionMessage).catch(() => {});
 }
 
+function sendTradingViewTabMessage(
+  tabId: number,
+  message: Extract<ExtensionMessage, { type: 'TV_CONTENT_PING' | 'TV_PREPARE_AUTO_CAPTURE' }>
+): Promise<any> {
+  return Promise.race([
+    chrome.tabs.sendMessage(tabId, message),
+    delay(TRADINGVIEW_MESSAGE_TIMEOUT_MS).then(() => {
+      throw new Error(`TradingView content script did not respond within ${Math.round(TRADINGVIEW_MESSAGE_TIMEOUT_MS / 1000)}s`);
+    }),
+  ]);
+}
+
+async function emitTradingViewAutoProgress(progress: TradingViewAutoCaptureProgress): Promise<void> {
+  await chrome.runtime.sendMessage({
+    type: 'TV_AUTO_CAPTURE_PROGRESS',
+    progress,
+  } satisfies ExtensionMessage).catch(() => {});
+}
+
+async function emitTradingViewAutoComplete(result: TradingViewAutoCaptureResult): Promise<void> {
+  await chrome.runtime.sendMessage({
+    type: 'TV_AUTO_CAPTURE_COMPLETE',
+    result,
+  } satisfies ExtensionMessage).catch(() => {});
+}
+
+async function emitTradingViewAutoFailed(result: TradingViewAutoCaptureResult): Promise<void> {
+  await chrome.runtime.sendMessage({
+    type: 'TV_AUTO_CAPTURE_FAILED',
+    result,
+  } satisfies ExtensionMessage).catch(() => {});
+}
+
 async function processCaptureQueue(): Promise<void> {
   if (captureProcessorRunning) return;
   captureProcessorRunning = true;
@@ -497,40 +707,16 @@ async function processCapture(pending: PendingCapture): Promise<void> {
     return;
   }
 
-  const imageBlob = dataUrlToBlob(result.dataUrl, result.mimeType ?? 'image/png');
-
-  const screenshotId = generateId();
-  const key = buildScreenshotKey(pending.symbol.normalized, pending.timeframe.normalized);
-  const screenshotMeta: ScreenshotMeta = {
-    id: screenshotId,
-    key,
-    symbol: pending.symbol.display,
-    normalizedSymbol: pending.symbol.normalized,
-    timeframe: pending.timeframe.normalized,
-    blobId: generateId(),
+  await saveTradingViewScreenshot({
+    dataUrl: result.dataUrl,
     hash: result.hash,
     mimeType: result.mimeType ?? 'image/png',
-    capturedAt: Date.now(),
-    rawTradingView: {
-      intervalValue: pending.timeframe.dataValue,
-      intervalTooltip: pending.timeframe.tooltip,
-    },
-    tradingViewTelemetry: pending.telemetry,
-  };
-
-  await db.putScreenshotReplacingChart(
-    screenshotMeta,
-    imageBlob
-  );
-
-  void chrome.runtime.sendMessage({
-    type: 'SCREENSHOT_UPDATE',
-    screenshot: screenshotMeta,
-  } satisfies ExtensionMessage).catch(() => {
-    // The side panel may be closed; persisted IndexedDB state is authoritative.
+    symbol: pending.symbol,
+    timeframe: pending.timeframe,
+    telemetry: pending.telemetry,
   });
 
-  console.log(`[bare meat🧸🥩] saved ${screenshotMeta.key}`);
+  console.log(`[bare meat🧸🥩] saved ${buildScreenshotKey(pending.symbol.normalized, pending.timeframe.normalized)}`);
 }
 
 async function captureVisibleTradingViewTab(pending: PendingCapture): Promise<ClipboardReadResponse | null> {

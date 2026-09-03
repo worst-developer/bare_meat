@@ -49,6 +49,36 @@ export interface DetectedInterval {
   visibleText?: string;
 }
 
+export type TradingViewAutoTimeframe = '15m' | '30m' | '1h' | '4h' | '1d' | '1w';
+
+export interface TradingViewChartPreset {
+  id: string;
+  name: string;
+  symbol: string;
+  chartUrl: string;
+  enabled: boolean;
+  timeframes: Record<TradingViewAutoTimeframe, boolean>;
+}
+
+export interface TradingViewAutoCaptureSettings {
+  presets: TradingViewChartPreset[];
+}
+
+export interface TradingViewAutoCaptureRequest {
+  presets: TradingViewChartPreset[];
+}
+
+export interface TradingViewAutoCaptureProgress {
+  symbol: string;
+  timeframe: TradingViewAutoTimeframe;
+  message: string;
+}
+
+export interface TradingViewAutoCaptureResult {
+  captured: number;
+  errors: string[];
+}
+
 export interface PendingCapture {
   id: string;
   symbol: DetectedSymbol;

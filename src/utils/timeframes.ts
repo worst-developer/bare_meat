@@ -32,15 +32,18 @@ export function normalizeTradingViewInterval(input: IntervalInput): string | nul
 }
 
 function tryNormalizeFromDataValue(value: string): string | null {
-  const minutes = Number.parseInt(value, 10);
-  if (!Number.isNaN(minutes) && String(minutes) === value) {
+  const trimmed = value.trim();
+  if (/^[DW]$/i.test(trimmed)) return `1${trimmed.toUpperCase()}`;
+
+  const minutes = Number.parseInt(trimmed, 10);
+  if (!Number.isNaN(minutes) && String(minutes) === trimmed) {
     if (minutes < 60) return `${minutes}m`;
     if (minutes % 60 === 0) return `${minutes / 60}H`;
     return value;
   }
 
-  if (/^\d+[DWMS]$/i.test(value)) {
-    return value.toUpperCase();
+  if (/^\d+[DWMS]$/i.test(trimmed)) {
+    return trimmed.toUpperCase();
   }
 
   return null;
@@ -65,6 +68,7 @@ function extractTimeframeFromText(text: string): string | null {
 function normalizeVisibleText(text: string): string | null {
   const trimmed = text.trim();
 
+  if (/^[DW]$/i.test(trimmed)) return `1${trimmed.toUpperCase()}`;
   if (/^\d+m$/i.test(trimmed)) return trimmed.toLowerCase();
   if (/^\d+h$/i.test(trimmed)) return trimmed.toUpperCase();
   if (/^\d+[DWM]$/i.test(trimmed)) return trimmed.toUpperCase();

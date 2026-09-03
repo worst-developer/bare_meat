@@ -10,6 +10,10 @@ import type {
   Provider,
   ScreenshotMeta,
   TargetDispatchState,
+  TradingViewAutoCaptureProgress,
+  TradingViewAutoCaptureRequest,
+  TradingViewAutoCaptureResult,
+  TradingViewAutoTimeframe,
 } from '../types';
 
 export type ExtensionMessage =
@@ -17,6 +21,11 @@ export type ExtensionMessage =
   | { type: 'TV_CONTENT_PING' }
   | { type: 'TV_CAPTURE_SHORTCUT' }
   | { type: 'TV_CAPTURE_TRIGGERED'; capture: PendingCapture }
+  | { type: 'TV_AUTO_CAPTURE_REQUEST'; request: TradingViewAutoCaptureRequest }
+  | { type: 'TV_AUTO_CAPTURE_PROGRESS'; progress: TradingViewAutoCaptureProgress }
+  | { type: 'TV_AUTO_CAPTURE_COMPLETE'; result: TradingViewAutoCaptureResult }
+  | { type: 'TV_AUTO_CAPTURE_FAILED'; result: TradingViewAutoCaptureResult }
+  | { type: 'TV_PREPARE_AUTO_CAPTURE'; symbol: string; timeframe: TradingViewAutoTimeframe }
   | { type: 'TV_READ_CLIPBOARD_IMAGE' }
   | { type: 'TV_SCRAPE_TELEMETRY' }
   | { type: 'CG_SCRAPE_REQUEST'; request: CoinglassScrapeRequest }
