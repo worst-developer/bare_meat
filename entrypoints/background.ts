@@ -35,6 +35,13 @@ const TRADINGVIEW_MESSAGE_TIMEOUT_MS = 75000;
 
 let offscreenDocumentCreated = false;
 let captureProcessorRunning = false;
+let screenshotWorkQueue: Promise<void> = Promise.resolve();
+
+function queueScreenshotWork<T>(work: () => Promise<T>): Promise<T> {
+  const result = screenshotWorkQueue.then(work, work);
+  screenshotWorkQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
 
 interface ClipboardReadResponse {
   success: boolean;
@@ -86,7 +93,7 @@ async function handleRuntimeMessage(
     }
 
     if (message.type === 'TV_AUTO_CAPTURE_REQUEST') {
-      const result = await autoCaptureTradingView(message.request);
+      const result = await queueScreenshotWork(() => autoCaptureTradingView(message.request));
       return result.errors.length > 0
         ? { success: false, error: result.errors.join('; ') }
         : { success: true };
@@ -198,7 +205,7 @@ async function scrapeCoinglass(request: CoinglassScrapeRequest): Promise<void> {
       }
     }
 
-    await scrapeCoinglassScreenshots(request, snapshot, previousActiveTab);
+    await queueScreenshotWork(() => scrapeCoinglassScreenshots(request, snapshot, previousActiveTab));
 
     snapshot.status = snapshotHasData(snapshot)
       ? snapshot.errors.length > 0 || snapshot.warnings.length > 0 ? 'partial' : 'success'
@@ -277,7 +284,6 @@ async function autoCaptureTradingView(request: TradingViewAutoCaptureRequest): P
             result.captured += 1;
           } catch (error) {
             result.errors.push(`${preset.symbol} ${timeframe}: ${error instanceof Error ? error.message : String(error)}`);
-            break;
           }
         }
       } catch (error) {

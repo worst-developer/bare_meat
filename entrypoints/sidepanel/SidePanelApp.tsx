@@ -239,11 +239,15 @@ export default function SidePanelApp(): JSX.Element {
   const coinglassImageScreenshots = coinglassSnapshot?.screenshots ?? [];
   const hasCoinglassScreenshots = (coinglassSnapshot?.screenshots?.length ?? 0) > 0;
   const hasVisibleScreenshots = screenshots.length > 0 || hasCoinglassScreenshots;
-  const canDispatchCoinglass = Boolean(coinglassSnapshot && (includeCoinglassData || hasCoinglassScreenshots));
+  const canDispatchCoinglass = Boolean(
+    includeCoinglassData
+      && coinglassSnapshot
+      && coinglassSnapshot.status !== 'error'
+      && coinglassSnapshot.status !== 'scraping'
+  );
   const coinglassMarketDataEnabled = COINGLASS_MARKET_DATA_SECTIONS.some((section) => coinglassSettings[section]);
   const coinglassHeatmapsEnabled = coinglassScreenshotSettings.liquidationHeatmap || coinglassScreenshotSettings.liquidationMap;
   const enabledTradingViewPresets = tradingViewPresets.filter((preset) => preset.enabled && enabledTradingViewTimeframes(preset).length > 0);
-  const canAutoCaptureTradingView = includeScrapedData && enabledTradingViewPresets.length > 0;
   const isDataScraping = tradingViewAutoState === 'capturing' || coinglassState === 'scraping';
 
   async function persistChatTargets(nextTargets: ChatTarget[]): Promise<void> {
@@ -403,29 +407,25 @@ export default function SidePanelApp(): JSX.Element {
       return;
     }
 
-    if (shouldScrapeTradingView) {
-      if (enabledTradingViewPresets.length === 0) {
-        setTradingViewAutoState('error');
-        setTradingViewAutoMessage('Select at least one TradingView chart and timeframe.');
-        return;
-      }
-
+    const jobs: Promise<void>[] = [];
+    if (shouldScrapeTradingView && enabledTradingViewPresets.length === 0) {
+      setTradingViewAutoState('error');
+      setTradingViewAutoMessage('Select at least one TradingView chart and timeframe.');
+    } else if (shouldScrapeTradingView) {
       setTradingViewAutoState('capturing');
       setTradingViewAutoMessage('Opening TradingView...');
-      try {
-        await runTradingViewAutoCapture(enabledTradingViewPresets);
-        const nextScreenshots = await db.listScreenshots();
-        replaceScreenshots(nextScreenshots);
-      } catch (error) {
-        setTradingViewAutoState('error');
-        setTradingViewAutoMessage(error instanceof Error ? error.message : String(error));
-        if (!shouldScrapeCoinglass) return;
-      }
+      jobs.push(
+        runTradingViewAutoCapture(enabledTradingViewPresets)
+          .then(async () => replaceScreenshots(await db.listScreenshots()))
+          .catch((error) => {
+            setTradingViewAutoState('error');
+            setTradingViewAutoMessage(error instanceof Error ? error.message : String(error));
+          })
+      );
     }
-
-    if (shouldScrapeCoinglass) {
-      await handleScrapeCoinglass();
-    }
+    if (shouldScrapeCoinglass) jobs.push(handleScrapeCoinglass());
+    if (jobs.length === 0) return;
+    await Promise.all(jobs);
   }
 
   async function scrapeActiveTradingViewTelemetry(): Promise<TradingViewTelemetrySnapshot> {
@@ -508,25 +508,16 @@ export default function SidePanelApp(): JSX.Element {
   }
 
   async function handlePrepareChats(): Promise<void> {
-    const selectedAutoPresets = includeScrapedData ? enabledTradingViewPresets : [];
-    const canDispatchCoinglassOnly = screenshots.length === 0 && selectedAutoPresets.length === 0 && canDispatchCoinglass;
-    if ((!canDispatchCoinglassOnly && screenshots.length === 0 && selectedAutoPresets.length === 0) || dispatchTargets.length === 0) return;
-    if (includeCoinglassData && !coinglassSnapshot) {
+    if ((screenshots.length === 0 && !canDispatchCoinglass) || dispatchTargets.length === 0) return;
+    if (includeCoinglassData && !canDispatchCoinglass) {
       setCoinglassState('error');
-      setCoinglassMessage('Scrape Coinglass before including it in the prompt.');
+      setCoinglassMessage('Get valid Coinglass data before including it in the prompt.');
       return;
     }
 
     setIsSubmitting(true);
     try {
-      let dispatchScreenshots = screenshots;
-      if (selectedAutoPresets.length > 0) {
-        setTradingViewAutoState('capturing');
-        setTradingViewAutoMessage('Opening TradingView...');
-        await runTradingViewAutoCapture(selectedAutoPresets);
-        dispatchScreenshots = await db.listScreenshots();
-        replaceScreenshots(dispatchScreenshots);
-      }
+      const dispatchScreenshots = screenshots;
 
       let dispatchTelemetry: TradingViewTelemetrySnapshot | undefined;
       if (includeScrapedData && dispatchScreenshots.length > 0) {
@@ -553,7 +544,7 @@ export default function SidePanelApp(): JSX.Element {
         includeScrapedData,
         telemetry: dispatchTelemetry,
         includeCoinglassData,
-        coinglassSnapshot: coinglassSnapshot ?? undefined,
+        coinglassSnapshot: includeCoinglassData ? coinglassSnapshot ?? undefined : undefined,
       } satisfies ExtensionMessage);
     } catch (error) {
       setTelemetryScrapeState('error');
@@ -709,85 +700,169 @@ export default function SidePanelApp(): JSX.Element {
           </section>
 
           <section className="config-section">
-            <div className="section-heading section-heading--status">
-              <div>
-                <h2 className="section-heading__title section-heading__title--logo">
-                  <img className="service-logo-image service-logo-image--backplate" src={SOURCE_LOGOS.tradingView} alt="" aria-hidden="true" />
-                  TradingView charts
-                </h2>
-              </div>
-              {tradingViewAutoState !== 'idle' && (
-                <span className="section-status" title={tradingViewAutoMessage || tradingViewAutoState}>
-                  <span className={`status status-sm ${tradingViewAutoState === 'success' ? 'status-success' : tradingViewAutoState === 'error' ? 'status-error' : 'status-warning'}`} />
-                </span>
-              )}
-            </div>
-
-            {tradingViewPresets.length === 0 ? (
-              <div className="empty-state empty-state--compact">
-                Add TradingView charts in settings.
-              </div>
-            ) : (
-              <div className="tv-preset-options">
-                {tradingViewPresets.map((preset) => (
-                  <label key={preset.id} className="symbol-option tv-preset-option">
-                    <input
-                      className="checkbox checkbox-sm"
-                      type="checkbox"
-                      checked={preset.enabled}
-                      onChange={(event) => void handleToggleTradingViewPreset(preset.id, event.target.checked)}
-                    />
-                    <span>{preset.name}</span>
-                  </label>
-                ))}
-              </div>
-            )}
-
-            {tradingViewAutoMessage && (
-              <div className={`capture-message capture-message--${tradingViewAutoState}`}>
-                <span className="capture-message__icon" aria-hidden="true">
-                  {tradingViewAutoState === 'error' ? 'x' : '✓'}
-                </span>
-                <span>{tradingViewAutoMessage}</span>
-              </div>
-            )}
-          </section>
-
-          <section className="config-section">
             <div className="section-heading">
               <div>
                 <h2 className="section-heading__title">Prompt data</h2>
               </div>
             </div>
-            <div className="control-list">
-              <label className="control-row">
-                <input
-                  className="toggle toggle-sm"
-                  type="checkbox"
-                  checked={includeScrapedData}
-                  onChange={(event) => void handleIncludeScrapedDataChange(event.target.checked)}
-                />
-                <span className="control-row__body">
-                  <span className="control-row__title control-row__title--logo">
-                    <img className="service-logo-image service-logo-image--backplate" src={SOURCE_LOGOS.tradingView} alt="" aria-hidden="true" />
-                    TradingView context
+            <div className="prompt-source-list">
+              <div className="prompt-source">
+                <label className="control-row">
+                  <input
+                    className="toggle toggle-sm"
+                    type="checkbox"
+                    checked={includeScrapedData}
+                    onChange={(event) => void handleIncludeScrapedDataChange(event.target.checked)}
+                  />
+                  <span className="control-row__body">
+                    <span className="control-row__title control-row__title--logo">
+                      <img className="service-logo-image service-logo-image--backplate" src={SOURCE_LOGOS.tradingView} alt="" aria-hidden="true" />
+                      TradingView context
+                    </span>
                   </span>
-                </span>
-              </label>
-              <label className="control-row">
-                <input
-                  className="toggle toggle-sm"
-                  type="checkbox"
-                  checked={includeCoinglassData}
-                  onChange={(event) => void handleIncludeCoinglassDataChange(event.target.checked)}
-                />
-                <span className="control-row__body">
-                  <span className="control-row__title control-row__title--logo">
-                    <img className="service-logo-image" src={SOURCE_LOGOS.coinglass} alt="" aria-hidden="true" />
-                    Coinglass market data
+                </label>
+                {includeScrapedData && (
+                  <div className="source-options">
+                    <div className="source-options__toolbar">
+                      {tradingViewAutoState !== 'idle' && (
+                        <span className={`status status-sm ${tradingViewAutoState === 'success' ? 'status-success' : tradingViewAutoState === 'error' ? 'status-error' : 'status-warning'}`} />
+                      )}
+                      <button
+                        className="btn btn-ghost btn-square btn-sm source-settings-button"
+                        type="button"
+                        aria-label="Open TradingView chart settings"
+                        onClick={() => setIsSettingsOpen(true)}
+                      >
+                        <span className="settings-icon" aria-hidden="true">⚙</span>
+                      </button>
+                    </div>
+                    <div className="source-options__content">
+                      {tradingViewPresets.length === 0 ? (
+                        <div className="empty-state empty-state--compact">Add TradingView charts in settings.</div>
+                      ) : (
+                        <div className="tv-preset-options">
+                          {tradingViewPresets.map((preset) => (
+                            <label key={preset.id} className="symbol-option tv-preset-option">
+                              <input
+                                className="checkbox checkbox-sm"
+                                type="checkbox"
+                                checked={preset.enabled}
+                                onChange={(event) => void handleToggleTradingViewPreset(preset.id, event.target.checked)}
+                              />
+                              <span>{preset.name}</span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                      {tradingViewAutoMessage && (
+                        <div className={`capture-message capture-message--${tradingViewAutoState}`}>
+                          <span className="capture-message__icon" aria-hidden="true">{tradingViewAutoState === 'error' ? 'x' : '✓'}</span>
+                          <span>{tradingViewAutoMessage}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="prompt-source">
+                <label className="control-row">
+                  <input
+                    className="toggle toggle-sm"
+                    type="checkbox"
+                    checked={includeCoinglassData}
+                    onChange={(event) => void handleIncludeCoinglassDataChange(event.target.checked)}
+                  />
+                  <span className="control-row__body">
+                    <span className="control-row__title control-row__title--logo">
+                      <img className="service-logo-image" src={SOURCE_LOGOS.coinglass} alt="" aria-hidden="true" />
+                      Coinglass market data
+                    </span>
                   </span>
-                </span>
-              </label>
+                </label>
+                {includeCoinglassData && (
+                  <div className="source-options">
+                    {coinglassState !== 'idle' && (
+                      <div className="source-options__toolbar">
+                        <span className={`status status-sm ${coinglassState === 'success' ? 'status-success' : coinglassState === 'error' ? 'status-error' : 'status-warning'}`} />
+                      </div>
+                    )}
+                    <div className="source-options__content">
+                      <fieldset className="choice-fieldset">
+                        <legend className="choice-fieldset__label">Symbols</legend>
+                        <div className="symbol-options">
+                          {COINGLASS_SYMBOLS.map((symbol) => (
+                            <label key={symbol} className="symbol-option">
+                              <input
+                                className="checkbox checkbox-sm"
+                                type="checkbox"
+                                checked={manualCoinglassSymbols.includes(symbol)}
+                                onChange={(event) => void handleManualCoinglassSymbolChange(symbol, event.target.checked)}
+                              />
+                              <span>{symbol}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </fieldset>
+
+                      <div className="control-list control-list--capture">
+                        <label className="control-row">
+                          <input className="toggle toggle-sm" type="checkbox" checked={coinglassMarketDataEnabled} onChange={(event) => void handleCoinglassMarketDataChange(event.target.checked)} />
+                          <span className="control-row__body"><span className="control-row__title">Market data</span></span>
+                        </label>
+                        <label className="control-row">
+                          <input className="toggle toggle-sm" type="checkbox" checked={coinglassHeatmapsEnabled} onChange={(event) => void handleCoinglassHeatmapsChange(event.target.checked)} />
+                          <span className="control-row__body"><span className="control-row__title">Liquidation charts</span></span>
+                        </label>
+                      </div>
+
+                      <details className="collapse collapse-arrow advanced-options">
+                        <summary className="collapse-title">Advanced capture options</summary>
+                        <div className="collapse-content advanced-options__content">
+                          <div className="advanced-options__group">
+                            <div className="advanced-options__label">Market data</div>
+                            {Object.entries(coinglassSettings).map(([section, enabled]) => (
+                              <label key={section} className="compact-control-row">
+                                <input className="toggle toggle-xs" type="checkbox" checked={enabled} onChange={(event) => void handleCoinglassSettingChange(section as CoinglassSection, event.target.checked)} />
+                                <span>{formatCoinglassSection(section as CoinglassSection)}</span>
+                              </label>
+                            ))}
+                          </div>
+                          <div className="advanced-options__group">
+                            <div className="advanced-options__label">Screenshots</div>
+                            <label className="compact-control-row">
+                              <input className="toggle toggle-xs" type="checkbox" checked={coinglassScreenshotSettings.liquidationHeatmap} onChange={(event) => void handleCoinglassScreenshotSettingChange('liquidationHeatmap', event.target.checked)} />
+                              <span>Liquidation heatmap</span>
+                            </label>
+                            <label className="compact-control-row">
+                              <input className="toggle toggle-xs" type="checkbox" checked={coinglassScreenshotSettings.liquidationMap} onChange={(event) => void handleCoinglassScreenshotSettingChange('liquidationMap', event.target.checked)} />
+                              <span>Liquidation map</span>
+                            </label>
+                          </div>
+                          <fieldset className="choice-fieldset choice-fieldset--compact">
+                            <legend className="choice-fieldset__label">Heatmap timeframes</legend>
+                            <div className="timeframe-options">
+                              {(['24h', '7d', '12h'] as CoinglassHeatmapTimeframe[]).map((timeframe) => (
+                                <label key={timeframe} className="timeframe-option">
+                                  <input className="checkbox checkbox-xs" type="checkbox" checked={coinglassScreenshotSettings.heatmapTimeframes[timeframe]} onChange={(event) => void handleCoinglassHeatmapTimeframeChange(timeframe, event.target.checked)} />
+                                  <span>{timeframe}</span>
+                                </label>
+                              ))}
+                            </div>
+                          </fieldset>
+                        </div>
+                      </details>
+
+                      {coinglassState !== 'idle' && (
+                        <div className={`capture-message capture-message--${coinglassState}`}>
+                          <span className="capture-message__icon" aria-hidden="true">{coinglassState === 'error' ? 'x' : '✓'}</span>
+                          <span>{coinglassMessage}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
             <button
               className="btn btn-primary btn-block scrape-button"
@@ -797,127 +872,6 @@ export default function SidePanelApp(): JSX.Element {
             >
               {isDataScraping ? 'Wait Data...' : 'Get Data'}
             </button>
-          </section>
-
-          <section className="config-section">
-            <div className="section-heading section-heading--status">
-              <div>
-                <h2 className="section-heading__title">Coinglass capture</h2>
-              </div>
-              {coinglassState !== 'idle' && (
-                <span className="section-status" title={coinglassMessage || coinglassState}>
-                  <span className={`status status-sm ${coinglassState === 'success' ? 'status-success' : coinglassState === 'error' ? 'status-error' : 'status-warning'}`} />
-                </span>
-              )}
-            </div>
-
-            <fieldset className="choice-fieldset">
-              <legend className="choice-fieldset__label">Symbols</legend>
-              <div className="symbol-options">
-                {COINGLASS_SYMBOLS.map((symbol) => (
-                  <label key={symbol} className="symbol-option">
-                    <input
-                      className="checkbox checkbox-sm"
-                      type="checkbox"
-                      checked={manualCoinglassSymbols.includes(symbol)}
-                      onChange={(event) => void handleManualCoinglassSymbolChange(symbol, event.target.checked)}
-                    />
-                    <span>{symbol}</span>
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-
-            <div className="control-list control-list--capture">
-              <label className="control-row">
-                <input
-                  className="toggle toggle-sm"
-                  type="checkbox"
-                  checked={coinglassMarketDataEnabled}
-                  onChange={(event) => void handleCoinglassMarketDataChange(event.target.checked)}
-                />
-                <span className="control-row__body">
-                  <span className="control-row__title">Market data</span>
-                </span>
-              </label>
-              <label className="control-row">
-                <input
-                  className="toggle toggle-sm"
-                  type="checkbox"
-                  checked={coinglassHeatmapsEnabled}
-                  onChange={(event) => void handleCoinglassHeatmapsChange(event.target.checked)}
-                />
-                <span className="control-row__body">
-                  <span className="control-row__title">Liquidation charts</span>
-                </span>
-              </label>
-            </div>
-
-            <details className="collapse collapse-arrow advanced-options">
-              <summary className="collapse-title">Advanced capture options</summary>
-              <div className="collapse-content advanced-options__content">
-                <div className="advanced-options__group">
-                  <div className="advanced-options__label">Market data</div>
-                  {Object.entries(coinglassSettings).map(([section, enabled]) => (
-                    <label key={section} className="compact-control-row">
-                      <input
-                        className="toggle toggle-xs"
-                        type="checkbox"
-                        checked={enabled}
-                        onChange={(event) => void handleCoinglassSettingChange(section as CoinglassSection, event.target.checked)}
-                      />
-                      <span>{formatCoinglassSection(section as CoinglassSection)}</span>
-                    </label>
-                  ))}
-                </div>
-                <div className="advanced-options__group">
-                  <div className="advanced-options__label">Screenshots</div>
-                  <label className="compact-control-row">
-                    <input
-                      className="toggle toggle-xs"
-                      type="checkbox"
-                      checked={coinglassScreenshotSettings.liquidationHeatmap}
-                      onChange={(event) => void handleCoinglassScreenshotSettingChange('liquidationHeatmap', event.target.checked)}
-                    />
-                    <span>Liquidation heatmap</span>
-                  </label>
-                  <label className="compact-control-row">
-                    <input
-                      className="toggle toggle-xs"
-                      type="checkbox"
-                      checked={coinglassScreenshotSettings.liquidationMap}
-                      onChange={(event) => void handleCoinglassScreenshotSettingChange('liquidationMap', event.target.checked)}
-                    />
-                    <span>Liquidation map</span>
-                  </label>
-                </div>
-                <fieldset className="choice-fieldset choice-fieldset--compact">
-                  <legend className="choice-fieldset__label">Heatmap timeframes</legend>
-                  <div className="timeframe-options">
-                    {(['24h', '7d', '12h'] as CoinglassHeatmapTimeframe[]).map((timeframe) => (
-                      <label key={timeframe} className="timeframe-option">
-                        <input
-                          className="checkbox checkbox-xs"
-                          type="checkbox"
-                          checked={coinglassScreenshotSettings.heatmapTimeframes[timeframe]}
-                          onChange={(event) => void handleCoinglassHeatmapTimeframeChange(timeframe, event.target.checked)}
-                        />
-                        <span>{timeframe}</span>
-                      </label>
-                    ))}
-                  </div>
-                </fieldset>
-              </div>
-            </details>
-
-            {coinglassMessage && (
-              <div className={`capture-message capture-message--${coinglassState}`}>
-                <span className="capture-message__icon" aria-hidden="true">
-                  {coinglassState === 'error' ? 'x' : '✓'}
-                </span>
-                <span>{coinglassMessage}</span>
-              </div>
-            )}
           </section>
 
           <section className="config-section prompt-section">
@@ -1040,7 +994,7 @@ export default function SidePanelApp(): JSX.Element {
       <section className="config-section action-panel">
         <button
           className="btn btn-primary btn-block action-button--submit"
-          disabled={dispatchTargets.length === 0 || isSubmitting || (screenshots.length === 0 && !canAutoCaptureTradingView && !canDispatchCoinglass)}
+          disabled={dispatchTargets.length === 0 || isSubmitting || (screenshots.length === 0 && !canDispatchCoinglass)}
           onClick={() => void handlePrepareChats()}
         >
           {isSubmitting ? 'Preparing...' : 'Submit'}

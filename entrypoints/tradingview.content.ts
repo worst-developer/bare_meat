@@ -106,16 +106,10 @@ async function prepareAutoCapture(
       throw new Error(`TradingView stayed on ${timeframe.visibleText ?? timeframe.normalized} instead of ${targetTimeframe}`);
     }
 
-    await hideAllDrawings(true);
-    await resetPriceScale();
-    await applyCustomDateRange(targetTimeframe);
-    await resetPriceScale();
-    await delay(900);
-
     symbol = detectTradingViewSymbol() ?? symbol;
     timeframe = detectTradingViewInterval() ?? timeframe;
     if (!timeframeMatches(timeframe, targetTimeframe)) {
-      throw new Error(`TradingView changed to ${timeframe.visibleText ?? timeframe.normalized} before capture; expected ${targetTimeframe}`);
+      throw new Error(`TradingView changed to ${timeframe.visibleText ?? timeframe.normalized} before telemetry; expected ${targetTimeframe}`);
     }
     if (!symbol) symbol = fallbackSymbol(expectedSymbol);
 
@@ -129,8 +123,18 @@ async function prepareAutoCapture(
       throw new Error('TradingView Data Window could not be closed before capture');
     }
     await delay(800);
-    await resetPriceScale();
+
+    await applyCustomDateRange(targetTimeframe);
     await delay(targetTimeframe === '1d' || targetTimeframe === '1w' ? 1500 : 500);
+
+    if (targetTimeframe === '1d' || targetTimeframe === '1w') {
+      await refreshAutoPriceScale();
+    }
+
+    timeframe = detectTradingViewInterval() ?? timeframe;
+    if (!timeframeMatches(timeframe, targetTimeframe)) {
+      throw new Error(`TradingView changed to ${timeframe.visibleText ?? timeframe.normalized} before capture; expected ${targetTimeframe}`);
+    }
 
     await hideAllDrawings(true);
     if (!await waitForStableHiddenDrawings()) {
@@ -381,47 +385,29 @@ async function applyCustomDateRange(timeframe: TradingViewAutoTimeframe): Promis
   }
 }
 
-async function resetPriceScale(): Promise<void> {
+async function refreshAutoPriceScale(): Promise<void> {
   const priceScale = findPriceScale();
   if (!priceScale) throw new Error('TradingView price scale was not found');
 
-  const rect = priceScale.getBoundingClientRect();
-  const clientX = rect.left + rect.width / 2;
-  const clientY = rect.top + rect.height / 2;
-  const target = document.elementFromPoint(clientX, clientY) as HTMLElement | null ?? priceScale;
-  const eventInit: MouseEventInit = {
-    bubbles: true,
-    cancelable: true,
-    composed: true,
-    clientX,
-    clientY,
-    button: 2,
-    buttons: 2,
-  };
+  // Re-enabling Auto forces TradingView to fit the newly selected date range.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    openContextMenu(priceScale);
+    const label = await waitForVisibleText('Auto (fits data to screen)', 1800);
+    if (!label) {
+      dismissTradingViewMenu();
+      throw new Error('TradingView Auto price scale option was not found');
+    }
 
-  target.dispatchEvent(new PointerEvent('pointerdown', eventInit));
-  target.dispatchEvent(new MouseEvent('mousedown', eventInit));
-  target.dispatchEvent(new PointerEvent('pointerup', { ...eventInit, buttons: 0 }));
-  target.dispatchEvent(new MouseEvent('mouseup', { ...eventInit, buttons: 0 }));
-  target.dispatchEvent(new MouseEvent('contextmenu', { ...eventInit, buttons: 0 }));
-
-  const reset = await waitForVisibleText('Reset price scale', 1500);
-  if (reset) {
-    clickElement(reset);
-    await delay(1200);
-    return;
+    activateMenuAction(menuActionElement(label));
+    if (!await waitUntil(() => !findVisibleText(document, 'Auto (fits data to screen)'), 1800)) {
+      dismissTradingViewMenu();
+      throw new Error('TradingView Auto price scale option did not close');
+    }
+    await delay(350);
   }
 
-  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
-  target.dispatchEvent(new MouseEvent('dblclick', {
-    bubbles: true,
-    cancelable: true,
-    composed: true,
-    clientX,
-    clientY,
-    detail: 2,
-  }));
-  await delay(1200);
+  dismissTradingViewMenu();
+  await delay(2200);
 }
 
 function findPriceScale(): HTMLElement | null {
@@ -443,6 +429,65 @@ function findPriceScale(): HTMLElement | null {
     const rightRect = right.getBoundingClientRect();
     return rightRect.height - leftRect.height || leftRect.width - rightRect.width;
   })[0] ?? null;
+}
+
+function openContextMenu(element: HTMLElement): void {
+  dismissTradingViewMenu();
+  const rect = element.getBoundingClientRect();
+  const clientX = rect.left + rect.width / 2;
+  const clientY = rect.top + rect.height / 2;
+  const target = document.elementFromPoint(clientX, clientY) as HTMLElement | null ?? element;
+  const eventInit: MouseEventInit = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    clientX,
+    clientY,
+    button: 2,
+    buttons: 2,
+  };
+
+  target.dispatchEvent(new PointerEvent('pointerdown', eventInit));
+  target.dispatchEvent(new MouseEvent('mousedown', eventInit));
+  target.dispatchEvent(new PointerEvent('pointerup', { ...eventInit, buttons: 0 }));
+  target.dispatchEvent(new MouseEvent('mouseup', { ...eventInit, buttons: 0 }));
+  target.dispatchEvent(new MouseEvent('contextmenu', { ...eventInit, buttons: 0 }));
+}
+
+function menuActionElement(label: HTMLElement): HTMLElement {
+  const roleItem = label.closest<HTMLElement>('[role="menuitemradio"], [role="menuitemcheckbox"], [role="menuitem"]');
+  if (roleItem) return roleItem;
+
+  let current: HTMLElement | null = label;
+  let action = label;
+  while (current && current !== document.body) {
+    if (current.textContent?.trim() === label.textContent?.trim() && current.getBoundingClientRect().width > action.getBoundingClientRect().width) {
+      action = current;
+    }
+    current = current.parentElement;
+  }
+  return action;
+}
+
+function activateMenuAction(element: HTMLElement): void {
+  const rect = element.getBoundingClientRect();
+  const eventInit: MouseEventInit = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    clientX: rect.left + rect.width / 2,
+    clientY: rect.top + rect.height / 2,
+  };
+  element.dispatchEvent(new PointerEvent('pointerdown', eventInit));
+  element.dispatchEvent(new MouseEvent('mousedown', eventInit));
+  element.dispatchEvent(new PointerEvent('pointerup', eventInit));
+  element.dispatchEvent(new MouseEvent('mouseup', eventInit));
+  element.click();
+}
+
+function dismissTradingViewMenu(): void {
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+  document.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', code: 'Escape', bubbles: true }));
 }
 
 function subtractDateWindow(to: Date, timeframe: TradingViewAutoTimeframe): Date {

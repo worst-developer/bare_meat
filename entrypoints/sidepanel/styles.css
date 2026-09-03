@@ -289,6 +289,53 @@ summary:focus-visible,
   gap: 0.75rem;
 }
 
+.prompt-source-list {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.prompt-source {
+  overflow: hidden;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius-box);
+  background: var(--color-base-100);
+}
+
+.prompt-source > .control-row {
+  border: 0;
+  border-radius: 0;
+}
+
+.source-options {
+  border-top: 1px solid var(--panel-border);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--color-base-200) 70%, var(--color-base-100));
+}
+
+.source-options__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  padding: 0.5rem 0.75rem 0;
+}
+
+.source-options__content {
+  display: grid;
+  gap: 0.75rem;
+  padding: 0.75rem;
+}
+
+.source-options__toolbar + .source-options__content {
+  padding-top: 0.5rem;
+}
+
+.source-settings-button {
+  min-height: 2rem;
+  height: 2rem;
+  width: 2rem;
+}
+
 .agent-list {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.55rem;
