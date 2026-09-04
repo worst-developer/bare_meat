@@ -70,9 +70,11 @@ export default function SidePanelApp(): JSX.Element {
       }
 
       if (message.type === 'CG_SCRAPE_COMPLETE' || message.type === 'CG_SCRAPE_FAILED') {
-        setCoinglassSnapshot(message.snapshot);
         setCoinglassState(message.snapshot.status === 'partial' ? 'partial' : message.snapshot.status === 'success' ? 'success' : 'error');
         setCoinglassMessage(coinglassSummaryMessage(message.snapshot));
+        void loadCoinglassSnapshot()
+          .then((snapshot) => setCoinglassSnapshot(snapshot ?? message.snapshot))
+          .catch(() => setCoinglassSnapshot(message.snapshot));
       }
 
       if (message.type === 'TV_AUTO_CAPTURE_PROGRESS') {

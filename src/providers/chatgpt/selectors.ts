@@ -34,6 +34,4 @@ export const CHATGPT_ATTACHMENT_UI_SELECTORS = [
   '[data-testid*="attachment" i]',
   '[aria-label*="attachment" i]',
   '[aria-label*="Attached" i]',
-  '.composer-parent img',
-  'form img',
 ];

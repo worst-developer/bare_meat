@@ -30,7 +30,13 @@ export async function saveCoinglassSnapshot(snapshot: CoinglassSnapshot): Promis
 
 export async function loadCoinglassSnapshot(): Promise<CoinglassSnapshot | null> {
   const snapshot = await loadStoredCoinglassSnapshot();
-  return snapshot ? { ...snapshot, screenshots: snapshot.screenshots ?? [] } : null;
+  if (!snapshot) return null;
+
+  const screenshots = await Promise.all((snapshot.screenshots ?? []).map(async (screenshot) => ({
+    ...screenshot,
+    dataUrl: await loadCoinglassScreenshotDataUrl(screenshot.id, screenshot.mimeType) ?? undefined,
+  })));
+  return { ...snapshot, screenshots };
 }
 
 export async function loadCoinglassScreenshotDataUrl(id: string, mimeType: string): Promise<string | null> {

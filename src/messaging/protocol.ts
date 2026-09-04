@@ -47,4 +47,11 @@ export type ExtensionMessage =
   | { type: 'DISPATCH_STATUS_UPDATE'; targetId: string; state: TargetDispatchState; message?: string; progress?: number }
   | { type: 'PROVIDER_PING' }
   | { type: 'PROVIDER_READY'; provider: Provider }
-  | { type: 'PROVIDER_PREPARE'; provider: Provider; prompt: string; screenshots: IncomingScreenshot[]; autosubmit: boolean };
+  | {
+    type: 'PROVIDER_PREPARE';
+    provider: Provider;
+    prompt: string;
+    screenshots: IncomingScreenshot[];
+    autosubmit: boolean;
+    phase?: 'all' | 'prompt' | 'attachments' | 'finish';
+  };

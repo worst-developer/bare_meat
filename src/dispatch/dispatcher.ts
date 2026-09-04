@@ -104,13 +104,15 @@ async function dispatchTarget(
       files: screenshots.map((screenshot) => screenshot.filename),
       autosubmit,
     });
-    const response = await chrome.tabs.sendMessage(tab.id, {
-      type: 'PROVIDER_PREPARE',
-      provider: target.provider,
-      prompt,
-      screenshots,
-      autosubmit,
-    } satisfies ExtensionMessage);
+    const response = target.provider === 'chatgpt'
+      ? await prepareChatGpt(tab.id, prompt, screenshots, autosubmit)
+      : await chrome.tabs.sendMessage(tab.id, {
+        type: 'PROVIDER_PREPARE',
+        provider: target.provider,
+        prompt,
+        screenshots,
+        autosubmit,
+      } satisfies ExtensionMessage);
     logAgentFlow(target, 'prepare response', response);
 
     if (!response?.success) {
@@ -129,6 +131,58 @@ async function dispatchTarget(
     logAgentFlow(target, 'error', { error: String(error) }, 'error');
     await emitTargetStatus(target.id, 'error', String(error));
   }
+}
+
+async function prepareChatGpt(
+  tabId: number,
+  prompt: string,
+  screenshots: IncomingScreenshot[],
+  autosubmit: boolean
+): Promise<{ success: boolean; error?: string }> {
+  await sendChatGptPhase(tabId, 'prompt', prompt, []);
+
+  const documents = screenshots.filter((file) => !file.mimeType.startsWith('image/'));
+  const images = screenshots.filter((file) => file.mimeType.startsWith('image/'));
+  const batches = [
+    ...documents.map((file) => [file]),
+    ...chunkIncomingScreenshots(images, 4),
+  ];
+
+  for (const batch of batches) {
+    await sendChatGptPhase(tabId, 'attachments', '', batch);
+  }
+
+  return sendChatGptPhase(tabId, 'finish', prompt, [], autosubmit);
+}
+
+async function sendChatGptPhase(
+  tabId: number,
+  phase: 'prompt' | 'attachments' | 'finish',
+  prompt: string,
+  screenshots: IncomingScreenshot[],
+  autosubmit = false
+): Promise<{ success: boolean; error?: string }> {
+  const response = await chrome.tabs.sendMessage(tabId, {
+    type: 'PROVIDER_PREPARE',
+    provider: 'chatgpt',
+    prompt,
+    screenshots,
+    autosubmit,
+    phase,
+  } satisfies ExtensionMessage) as { success?: boolean; error?: string } | undefined;
+
+  if (!response?.success) {
+    throw new Error(response?.error ?? `ChatGPT ${phase} phase failed`);
+  }
+  return { success: true };
+}
+
+function chunkIncomingScreenshots(files: IncomingScreenshot[], size: number): IncomingScreenshot[][] {
+  const chunks: IncomingScreenshot[][] = [];
+  for (let index = 0; index < files.length; index += size) {
+    chunks.push(files.slice(index, index + size));
+  }
+  return chunks;
 }
 
 async function findOrOpenChatTab(target: ChatTarget): Promise<chrome.tabs.Tab> {

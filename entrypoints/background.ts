@@ -633,15 +633,22 @@ async function emitCoinglassProgress(progress: CoinglassScrapeProgress): Promise
 async function emitCoinglassComplete(snapshot: CoinglassSnapshot): Promise<void> {
   await chrome.runtime.sendMessage({
     type: 'CG_SCRAPE_COMPLETE',
-    snapshot,
+    snapshot: coinglassSnapshotWithoutImageData(snapshot),
   } satisfies ExtensionMessage).catch(() => {});
 }
 
 async function emitCoinglassFailed(snapshot: CoinglassSnapshot): Promise<void> {
   await chrome.runtime.sendMessage({
     type: 'CG_SCRAPE_FAILED',
-    snapshot,
+    snapshot: coinglassSnapshotWithoutImageData(snapshot),
   } satisfies ExtensionMessage).catch(() => {});
+}
+
+function coinglassSnapshotWithoutImageData(snapshot: CoinglassSnapshot): CoinglassSnapshot {
+  return {
+    ...snapshot,
+    screenshots: snapshot.screenshots?.map(({ dataUrl: _dataUrl, ...screenshot }) => screenshot),
+  };
 }
 
 function sendTradingViewTabMessage(

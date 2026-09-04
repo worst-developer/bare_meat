@@ -21,8 +21,8 @@ import {
   CHATGPT_SEND_SELECTORS,
 } from './selectors';
 
-const CHATGPT_UPLOAD_BATCH_SIZE = 20;
-const CHATGPT_UPLOAD_BATCH_DELAY_MS = 800;
+const CHATGPT_UPLOAD_BATCH_SIZE = 4;
+const CHATGPT_UPLOAD_BATCH_DELAY_MS = 1000;
 const CHATGPT_BATCH_UPLOAD_TIMEOUT_MS = 45000;
 const CHATGPT_UPLOAD_FALLBACK_SETTLE_MS = 1600;
 
@@ -32,6 +32,13 @@ export class ChatGptAdapter implements ProviderAdapter {
   private attachmentUiBaseline = 0;
   private expectedAttachmentCount = 0;
   private attachedCount = 0;
+
+  beginTransfer(): void {
+    this.composer = null;
+    this.attachmentUiBaseline = this.countAttachmentUi();
+    this.expectedAttachmentCount = 0;
+    this.attachedCount = 0;
+  }
 
   detectPage(): boolean {
     return location.hostname === 'chatgpt.com';
@@ -56,20 +63,23 @@ export class ChatGptAdapter implements ProviderAdapter {
   }
 
   async attachFiles(files: File[]): Promise<void> {
-    this.expectedAttachmentCount = files.length;
-    this.attachedCount = 0;
     if (files.length === 0) {
       return;
     }
 
     const composer = this.composer ?? await this.waitForComposer(15000);
     this.attachmentUiBaseline = this.countAttachmentUi();
+    this.expectedAttachmentCount = files.length;
+    this.attachedCount = 0;
 
     const batches = chatGptUploadBatches(files);
     for (const [index, batch] of batches.entries()) {
       await this.attachFileBatch(composer, batch);
       const nextAttachedCount = this.attachedCount + batch.length;
-      await this.waitForUploadedAttachments(nextAttachedCount, CHATGPT_BATCH_UPLOAD_TIMEOUT_MS);
+      const uploaded = await this.waitForUploadedAttachments(nextAttachedCount, CHATGPT_BATCH_UPLOAD_TIMEOUT_MS);
+      if (!uploaded) {
+        throw new Error(`ChatGPT attached only ${this.countNewAttachmentUi()} of ${nextAttachedCount} expected files`);
+      }
       this.attachedCount = nextAttachedCount;
       if (index < batches.length - 1) {
         await delay(CHATGPT_UPLOAD_BATCH_DELAY_MS);
@@ -218,7 +228,10 @@ export class ChatGptAdapter implements ProviderAdapter {
   }
 
   private countAttachmentUi(): number {
-    return document.querySelectorAll(CHATGPT_ATTACHMENT_UI_SELECTORS.join(',')).length;
+    return Math.max(
+      0,
+      ...CHATGPT_ATTACHMENT_UI_SELECTORS.map((selector) => document.querySelectorAll(selector).length)
+    );
   }
 }
 
@@ -241,7 +254,12 @@ async function incomingScreenshotToFileForChatGpt(screenshot: IncomingScreenshot
 }
 
 function chatGptUploadBatches(files: File[]): File[][] {
-  return chunkFiles(files, CHATGPT_UPLOAD_BATCH_SIZE);
+  const documents = files.filter((file) => !file.type.startsWith('image/'));
+  const images = files.filter((file) => file.type.startsWith('image/'));
+  return [
+    ...documents.map((file) => [file]),
+    ...chunkFiles(images, CHATGPT_UPLOAD_BATCH_SIZE),
+  ];
 }
 
 function chunkFiles(files: File[], size: number): File[][] {
