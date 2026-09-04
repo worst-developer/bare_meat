@@ -4,6 +4,7 @@ import deepseekLogo from './assets/deepseek.svg?url';
 import grokLogo from './assets/grok.svg?url';
 import kimiLogo from './assets/kimi-color.svg?url';
 import openaiLogo from './assets/openai.svg?url';
+import t3Logo from './assets/t3.svg?url';
 import tradingViewLogo from './assets/trading-view-dark.svg?url';
 
 export const SOURCE_LOGOS = {
@@ -16,6 +17,7 @@ const PROVIDER_LOGOS: Record<Provider, string> = {
   deepseek: deepseekLogo,
   grok: grokLogo,
   kimi: kimiLogo,
+  t3: t3Logo,
 };
 
 export function logoForProvider(provider: Provider): string {

@@ -39,6 +39,8 @@ export default defineConfig({
       'https://www.kimi.moonshot.cn/*',
       'https://kimi.com/*',
       'https://www.kimi.com/*',
+      'https://t3.chat/*',
+      'https://www.t3.chat/*',
     ],
   },
   outDir: 'dist',

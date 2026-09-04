@@ -18,6 +18,7 @@ const PROVIDER_OPTIONS: Array<{ value: Provider; label: string }> = [
   { value: 'grok', label: 'Grok' },
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'kimi', label: 'Kimi' },
+  { value: 't3', label: 'T3' },
 ];
 
 export default function ChatTargetForm({ initialData, onSave, onCancel }: ChatTargetFormProps) {

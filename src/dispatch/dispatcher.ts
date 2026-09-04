@@ -400,6 +400,7 @@ function providerContentScriptFile(provider: Provider): string | null {
   if (provider === 'grok') return 'content-scripts/grok.js';
   if (provider === 'kimi') return 'content-scripts/kimi.js';
   if (provider === 'deepseek') return 'content-scripts/deepseek.js';
+  if (provider === 't3') return 'content-scripts/t3.js';
   return null;
 }
 

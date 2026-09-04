@@ -19,7 +19,7 @@ export type {
 } from '../providers/coinglass/types';
 export { COINGLASS_SECTIONS, COINGLASS_SYMBOLS } from '../providers/coinglass/types';
 
-export type Provider = 'chatgpt' | 'grok' | 'deepseek' | 'kimi';
+export type Provider = 'chatgpt' | 'grok' | 'deepseek' | 'kimi' | 't3';
 
 // Single chat target configuration
 export interface ChatTarget {
