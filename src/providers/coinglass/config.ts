@@ -26,7 +26,6 @@ export const COINGLASS_STORAGE_KEYS = {
   settings: 'coinglass_settings',
   screenshotSettings: 'coinglass_screenshot_settings',
   snapshot: 'coinglass_snapshot',
-  manualSymbols: 'coinglass_manual_symbols',
 } as const;
 
 export function enabledCoinglassSections(settings: CoinglassSettings): CoinglassSection[] {

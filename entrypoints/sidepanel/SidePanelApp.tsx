@@ -2,12 +2,11 @@ import React, { useEffect, useMemo, useState } from 'react';
 import SettingsModal from './components/SettingsModal';
 import { SOURCE_LOGOS, logoForProvider, providerLogoNeedsBackplate } from './logos';
 import type { ExtensionMessage } from '../../src/messaging/protocol';
-import type { ChatTarget, CoinglassHeatmapTimeframe, CoinglassScreenshotSettings, CoinglassSection, CoinglassSettings, CoinglassSnapshot, CoinglassSymbol, PromptSettings, ScreenshotMeta, TradingViewAutoCaptureResult, TradingViewChartPreset, TradingViewTelemetrySnapshot } from '../../src/types';
-import { COINGLASS_SYMBOLS } from '../../src/types';
+import type { ChatTarget, CoinglassHeatmapTimeframe, CoinglassScreenshotSettings, CoinglassSection, CoinglassSettings, CoinglassSnapshot, CoinglassSymbol, PromptSettings, ScreenshotMeta, TradingViewAutoCaptureResult, TradingViewAutoTimeframe, TradingViewChartPreset, TradingViewTelemetrySnapshot } from '../../src/types';
 import * as db from '../../src/storage/db';
 import { COINGLASS_STORAGE_KEYS, DEFAULT_COINGLASS_SCREENSHOT_SETTINGS, DEFAULT_COINGLASS_SETTINGS, enabledCoinglassSections, mergeCoinglassScreenshotSettings, mergeCoinglassSettings } from '../../src/providers/coinglass/config';
 import { loadCoinglassSnapshot } from '../../src/providers/coinglass/storage';
-import { TRADINGVIEW_AUTO_STORAGE_KEY, enabledTradingViewTimeframes, mergeTradingViewAutoSettings } from '../../src/tradingview/auto-capture';
+import { DEFAULT_TRADINGVIEW_TIMEFRAMES, TRADINGVIEW_AUTO_STORAGE_KEY, TRADINGVIEW_AUTO_TIMEFRAMES, enabledTradingViewTimeframes, mergeTradingViewAutoSettings } from '../../src/tradingview/auto-capture';
 import { isTradingViewScreenshot, validateTelemetryIntegrity, type TelemetryIntegrityResult } from '../../src/tradingview/telemetry-integrity';
 import { resolveMatchingTargets } from '../../src/routing/target-resolver';
 import { formatDuration, marketSessionStatuses, nextFourHourCandleClose } from '../../src/tradingview/session-clock';
@@ -20,6 +19,7 @@ const DEFAULT_PROMPT =
 const COINGLASS_MARKET_DATA_SECTIONS: CoinglassSection[] = [
   'openInterest',
   'fundingRateSymbol',
+  'liquidationsTotals',
   'fundingRate',
   'longShortRatio',
   'etf',
@@ -45,8 +45,8 @@ export default function SidePanelApp(): JSX.Element {
   const [coinglassSnapshot, setCoinglassSnapshot] = useState<CoinglassSnapshot | null>(null);
   const [coinglassState, setCoinglassState] = useState<'idle' | 'scraping' | 'success' | 'partial' | 'error'>('idle');
   const [coinglassMessage, setCoinglassMessage] = useState('');
-  const [manualCoinglassSymbols, setManualCoinglassSymbols] = useState<CoinglassSymbol[]>(['BTC']);
   const [tradingViewPresets, setTradingViewPresets] = useState<TradingViewChartPreset[]>([]);
+  const [tradingViewTimeframes, setTradingViewTimeframes] = useState<Record<TradingViewAutoTimeframe, boolean>>(DEFAULT_TRADINGVIEW_TIMEFRAMES);
   const [tradingViewAutoState, setTradingViewAutoState] = useState<'idle' | 'capturing' | 'success' | 'error'>('idle');
   const [tradingViewAutoMessage, setTradingViewAutoMessage] = useState('');
   const [telemetryScrapeState, setTelemetryScrapeState] = useState<'idle' | 'scraping' | 'success' | 'warning' | 'error'>('idle');
@@ -194,12 +194,10 @@ export default function SidePanelApp(): JSX.Element {
       COINGLASS_STORAGE_KEYS.include,
       COINGLASS_STORAGE_KEYS.settings,
       COINGLASS_STORAGE_KEYS.screenshotSettings,
-      COINGLASS_STORAGE_KEYS.manualSymbols,
     ]);
     setIncludeCoinglassData(result[COINGLASS_STORAGE_KEYS.include] === true);
 	    setCoinglassSettings(mergeCoinglassSettings(result[COINGLASS_STORAGE_KEYS.settings]));
 	    setCoinglassScreenshotSettings(mergeCoinglassScreenshotSettings(result[COINGLASS_STORAGE_KEYS.screenshotSettings]));
-	    setManualCoinglassSymbols(normalizeCoinglassSymbols(result[COINGLASS_STORAGE_KEYS.manualSymbols]));
 	    void loadCoinglassSnapshot()
 	      .then((snapshot) => {
 	        setCoinglassSnapshot(snapshot);
@@ -221,6 +219,7 @@ export default function SidePanelApp(): JSX.Element {
     const result = await chrome.storage.local.get([TRADINGVIEW_AUTO_STORAGE_KEY]);
     const settings = mergeTradingViewAutoSettings(result[TRADINGVIEW_AUTO_STORAGE_KEY]);
     setTradingViewPresets(settings.presets);
+    setTradingViewTimeframes(settings.timeframes);
     await chrome.storage.local.set({ [TRADINGVIEW_AUTO_STORAGE_KEY]: settings });
   }
 
@@ -237,7 +236,12 @@ export default function SidePanelApp(): JSX.Element {
   const enabledTargets = chatTargets.filter((target) => target.enabled);
   const matchingTargets = resolveMatchingTargets(screenshots, enabledTargets);
   const dispatchTargets = screenshots.length > 0 ? matchingTargets : enabledTargets;
-  const coinglassSymbols = manualCoinglassSymbols;
+  const selectedTradingViewPresets = tradingViewPresets.filter((preset) => preset.enabled);
+  const coinglassSymbols = [...new Set(
+    selectedTradingViewPresets
+      .map((preset) => preset.coinglassSymbol)
+      .filter((symbol): symbol is CoinglassSymbol => Boolean(symbol))
+  )];
   const coinglassImageScreenshots = coinglassSnapshot?.screenshots ?? [];
   const hasCoinglassScreenshots = (coinglassSnapshot?.screenshots?.length ?? 0) > 0;
   const hasVisibleScreenshots = screenshots.length > 0 || hasCoinglassScreenshots;
@@ -249,7 +253,7 @@ export default function SidePanelApp(): JSX.Element {
   );
   const coinglassMarketDataEnabled = COINGLASS_MARKET_DATA_SECTIONS.some((section) => coinglassSettings[section]);
   const coinglassHeatmapsEnabled = coinglassScreenshotSettings.liquidationHeatmap || coinglassScreenshotSettings.liquidationMap;
-  const enabledTradingViewPresets = tradingViewPresets.filter((preset) => preset.enabled && enabledTradingViewTimeframes(preset).length > 0);
+  const enabledTradingViewPresets = selectedTradingViewPresets.filter((preset) => enabledTradingViewTimeframes(preset).length > 0);
   const isDataScraping = tradingViewAutoState === 'capturing' || coinglassState === 'scraping';
 
   async function persistChatTargets(nextTargets: ChatTarget[]): Promise<void> {
@@ -275,8 +279,14 @@ export default function SidePanelApp(): JSX.Element {
   }
 
   async function persistTradingViewPresets(nextPresets: TradingViewChartPreset[]): Promise<void> {
-    setTradingViewPresets(nextPresets);
-    await chrome.storage.local.set({ [TRADINGVIEW_AUTO_STORAGE_KEY]: { presets: nextPresets } });
+    const normalizedPresets = nextPresets.map((preset) => ({ ...preset, timeframes: tradingViewTimeframes }));
+    setTradingViewPresets(normalizedPresets);
+    await chrome.storage.local.set({
+      [TRADINGVIEW_AUTO_STORAGE_KEY]: {
+        presets: normalizedPresets,
+        timeframes: tradingViewTimeframes,
+      },
+    });
   }
 
   async function handleSaveTradingViewPreset(preset: TradingViewChartPreset): Promise<void> {
@@ -291,6 +301,22 @@ export default function SidePanelApp(): JSX.Element {
     await persistTradingViewPresets(tradingViewPresets.map((preset) => (
       preset.id === presetId ? { ...preset, enabled } : preset
     )));
+  }
+
+  async function handleTradingViewTimeframeChange(
+    timeframe: TradingViewAutoTimeframe,
+    enabled: boolean
+  ): Promise<void> {
+    const nextTimeframes = { ...tradingViewTimeframes, [timeframe]: enabled };
+    const nextPresets = tradingViewPresets.map((preset) => ({ ...preset, timeframes: nextTimeframes }));
+    setTradingViewTimeframes(nextTimeframes);
+    setTradingViewPresets(nextPresets);
+    await chrome.storage.local.set({
+      [TRADINGVIEW_AUTO_STORAGE_KEY]: {
+        presets: nextPresets,
+        timeframes: nextTimeframes,
+      },
+    });
   }
 
   async function handleDeleteTradingViewPreset(presetId: string): Promise<void> {
@@ -317,12 +343,6 @@ export default function SidePanelApp(): JSX.Element {
     await chrome.storage.local.set({ [COINGLASS_STORAGE_KEYS.include]: value });
   }
 
-  async function handleCoinglassSettingChange(section: CoinglassSection, value: boolean): Promise<void> {
-    const nextSettings = { ...coinglassSettings, [section]: value };
-    setCoinglassSettings(nextSettings);
-    await chrome.storage.local.set({ [COINGLASS_STORAGE_KEYS.settings]: nextSettings });
-  }
-
   async function handleCoinglassMarketDataChange(value: boolean): Promise<void> {
     const nextSettings = { ...coinglassSettings };
     for (const section of COINGLASS_MARKET_DATA_SECTIONS) {
@@ -330,15 +350,6 @@ export default function SidePanelApp(): JSX.Element {
     }
     setCoinglassSettings(nextSettings);
     await chrome.storage.local.set({ [COINGLASS_STORAGE_KEYS.settings]: nextSettings });
-  }
-
-  async function handleCoinglassScreenshotSettingChange(
-    key: 'liquidationHeatmap' | 'liquidationMap',
-    value: boolean
-  ): Promise<void> {
-    const nextSettings = { ...coinglassScreenshotSettings, [key]: value };
-    setCoinglassScreenshotSettings(nextSettings);
-    await chrome.storage.local.set({ [COINGLASS_STORAGE_KEYS.screenshotSettings]: nextSettings });
   }
 
   async function handleCoinglassHeatmapsChange(value: boolean): Promise<void> {
@@ -366,22 +377,18 @@ export default function SidePanelApp(): JSX.Element {
     await chrome.storage.local.set({ [COINGLASS_STORAGE_KEYS.screenshotSettings]: nextSettings });
   }
 
-  async function handleManualCoinglassSymbolChange(symbol: CoinglassSymbol, enabled: boolean): Promise<void> {
-    const nextSymbols = enabled
-      ? [...new Set([...manualCoinglassSymbols, symbol])]
-      : manualCoinglassSymbols.filter((candidate) => candidate !== symbol);
-    const normalized = nextSymbols.length > 0 ? nextSymbols : ['BTC'] satisfies CoinglassSymbol[];
-    setManualCoinglassSymbols(normalized);
-    await chrome.storage.local.set({ [COINGLASS_STORAGE_KEYS.manualSymbols]: normalized });
-  }
-
   async function handleScrapeCoinglass(): Promise<void> {
     const sections = enabledCoinglassSections(coinglassSettings);
     const hasScreenshotSections = coinglassScreenshotSettings.liquidationMap
       || (coinglassScreenshotSettings.liquidationHeatmap && enabledCoinglassHeatmapTimeframes(coinglassScreenshotSettings).length > 0);
-    if (coinglassSymbols.length === 0 || (sections.length === 0 && !hasScreenshotSections)) {
+    if (coinglassSymbols.length === 0) {
       setCoinglassState('error');
-      setCoinglassMessage('Select at least one symbol and one Coinglass data section or screenshot option.');
+      setCoinglassMessage('Selected coins do not have a CoinGlass coin configured in chart settings.');
+      return;
+    }
+    if (sections.length === 0 && !hasScreenshotSections) {
+      setCoinglassState('error');
+      setCoinglassMessage('Enable CoinGlass market data or liquidation charts.');
       return;
     }
 
@@ -661,14 +668,6 @@ export default function SidePanelApp(): JSX.Element {
               <div>
                 <h2 className="section-heading__title">Agents</h2>
               </div>
-              <button
-                className="btn btn-ghost btn-square btn-sm settings-button"
-                type="button"
-                aria-label="Open settings"
-                onClick={() => setIsSettingsOpen(true)}
-              >
-                <span className="settings-icon" aria-hidden="true">⚙</span>
-              </button>
             </div>
             {chatTargets.length === 0 ? (
               <div className="empty-state empty-state--compact">
@@ -706,6 +705,53 @@ export default function SidePanelApp(): JSX.Element {
               <div>
                 <h2 className="section-heading__title">Prompt data</h2>
               </div>
+              <button
+                className="btn btn-ghost btn-square btn-sm settings-button"
+                type="button"
+                aria-label="Open settings"
+                onClick={() => setIsSettingsOpen(true)}
+              >
+                <span className="settings-icon" aria-hidden="true">⚙</span>
+              </button>
+            </div>
+            <div className="prompt-capture-selection">
+              <fieldset className="choice-fieldset">
+                <legend className="choice-fieldset__label">Coins</legend>
+                {tradingViewPresets.length === 0 ? (
+                  <div className="empty-state empty-state--compact">Add charts in settings.</div>
+                ) : (
+                  <div className="tv-preset-options">
+                    {tradingViewPresets.map((preset) => (
+                      <label key={preset.id} className="symbol-option tv-preset-option">
+                        <input
+                          className="checkbox checkbox-sm"
+                          type="checkbox"
+                          checked={preset.enabled}
+                          onChange={(event) => void handleToggleTradingViewPreset(preset.id, event.target.checked)}
+                        />
+                        <span>{preset.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </fieldset>
+
+              <fieldset className="choice-fieldset choice-fieldset--compact">
+                <legend className="choice-fieldset__label">Timeframes</legend>
+                <div className="timeframe-options">
+                  {TRADINGVIEW_AUTO_TIMEFRAMES.map((timeframe) => (
+                    <label key={timeframe} className="timeframe-option">
+                      <input
+                        className="checkbox checkbox-xs"
+                        type="checkbox"
+                        checked={tradingViewTimeframes[timeframe]}
+                        onChange={(event) => void handleTradingViewTimeframeChange(timeframe, event.target.checked)}
+                      />
+                      <span>{timeframe}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
             </div>
             <div className="prompt-source-list">
               <div className="prompt-source">
@@ -723,38 +769,11 @@ export default function SidePanelApp(): JSX.Element {
                     </span>
                   </span>
                 </label>
-                {includeScrapedData && (
+                {includeScrapedData && (tradingViewAutoState !== 'idle' || tradingViewAutoMessage) && (
                   <div className="source-options">
-                    <div className="source-options__toolbar">
+                    <div className="source-options__content">
                       {tradingViewAutoState !== 'idle' && (
                         <span className={`status status-sm ${tradingViewAutoState === 'success' ? 'status-success' : tradingViewAutoState === 'error' ? 'status-error' : 'status-warning'}`} />
-                      )}
-                      <button
-                        className="btn btn-ghost btn-square btn-sm source-settings-button"
-                        type="button"
-                        aria-label="Open TradingView chart settings"
-                        onClick={() => setIsSettingsOpen(true)}
-                      >
-                        <span className="settings-icon" aria-hidden="true">⚙</span>
-                      </button>
-                    </div>
-                    <div className="source-options__content">
-                      {tradingViewPresets.length === 0 ? (
-                        <div className="empty-state empty-state--compact">Add TradingView charts in settings.</div>
-                      ) : (
-                        <div className="tv-preset-options">
-                          {tradingViewPresets.map((preset) => (
-                            <label key={preset.id} className="symbol-option tv-preset-option">
-                              <input
-                                className="checkbox checkbox-sm"
-                                type="checkbox"
-                                checked={preset.enabled}
-                                onChange={(event) => void handleToggleTradingViewPreset(preset.id, event.target.checked)}
-                              />
-                              <span>{preset.name}</span>
-                            </label>
-                          ))}
-                        </div>
                       )}
                       {tradingViewAutoMessage && (
                         <div className={`capture-message capture-message--${tradingViewAutoState}`}>
@@ -790,23 +809,6 @@ export default function SidePanelApp(): JSX.Element {
                       </div>
                     )}
                     <div className="source-options__content">
-                      <fieldset className="choice-fieldset">
-                        <legend className="choice-fieldset__label">Symbols</legend>
-                        <div className="symbol-options">
-                          {COINGLASS_SYMBOLS.map((symbol) => (
-                            <label key={symbol} className="symbol-option">
-                              <input
-                                className="checkbox checkbox-sm"
-                                type="checkbox"
-                                checked={manualCoinglassSymbols.includes(symbol)}
-                                onChange={(event) => void handleManualCoinglassSymbolChange(symbol, event.target.checked)}
-                              />
-                              <span>{symbol}</span>
-                            </label>
-                          ))}
-                        </div>
-                      </fieldset>
-
                       <div className="control-list control-list--capture">
                         <label className="control-row">
                           <input className="toggle toggle-sm" type="checkbox" checked={coinglassMarketDataEnabled} onChange={(event) => void handleCoinglassMarketDataChange(event.target.checked)} />
@@ -816,32 +818,8 @@ export default function SidePanelApp(): JSX.Element {
                           <input className="toggle toggle-sm" type="checkbox" checked={coinglassHeatmapsEnabled} onChange={(event) => void handleCoinglassHeatmapsChange(event.target.checked)} />
                           <span className="control-row__body"><span className="control-row__title">Liquidation charts</span></span>
                         </label>
-                      </div>
-
-                      <details className="collapse collapse-arrow advanced-options">
-                        <summary className="collapse-title">Advanced capture options</summary>
-                        <div className="collapse-content advanced-options__content">
-                          <div className="advanced-options__group">
-                            <div className="advanced-options__label">Market data</div>
-                            {Object.entries(coinglassSettings).map(([section, enabled]) => (
-                              <label key={section} className="compact-control-row">
-                                <input className="toggle toggle-xs" type="checkbox" checked={enabled} onChange={(event) => void handleCoinglassSettingChange(section as CoinglassSection, event.target.checked)} />
-                                <span>{formatCoinglassSection(section as CoinglassSection)}</span>
-                              </label>
-                            ))}
-                          </div>
-                          <div className="advanced-options__group">
-                            <div className="advanced-options__label">Screenshots</div>
-                            <label className="compact-control-row">
-                              <input className="toggle toggle-xs" type="checkbox" checked={coinglassScreenshotSettings.liquidationHeatmap} onChange={(event) => void handleCoinglassScreenshotSettingChange('liquidationHeatmap', event.target.checked)} />
-                              <span>Liquidation heatmap</span>
-                            </label>
-                            <label className="compact-control-row">
-                              <input className="toggle toggle-xs" type="checkbox" checked={coinglassScreenshotSettings.liquidationMap} onChange={(event) => void handleCoinglassScreenshotSettingChange('liquidationMap', event.target.checked)} />
-                              <span>Liquidation map</span>
-                            </label>
-                          </div>
-                          <fieldset className="choice-fieldset choice-fieldset--compact">
+                        {coinglassHeatmapsEnabled && (
+                          <fieldset className="choice-fieldset choice-fieldset--compact heatmap-timeframes">
                             <legend className="choice-fieldset__label">Heatmap timeframes</legend>
                             <div className="timeframe-options">
                               {(['24h', '7d', '12h'] as CoinglassHeatmapTimeframe[]).map((timeframe) => (
@@ -852,8 +830,8 @@ export default function SidePanelApp(): JSX.Element {
                               ))}
                             </div>
                           </fieldset>
-                        </div>
-                      </details>
+                        )}
+                      </div>
 
                       {coinglassState !== 'idle' && (
                         <div className={`capture-message capture-message--${coinglassState}`}>
@@ -1348,33 +1326,6 @@ function quoteCurrencyFromSymbol(symbol: string): string {
   if (/USDT/i.test(symbol)) return 'USDT';
   if (/USD/i.test(symbol)) return 'USD';
   return 'unknown';
-}
-
-function normalizeCoinglassSymbols(value: unknown): CoinglassSymbol[] {
-  if (!Array.isArray(value)) return ['BTC'];
-  const symbols = value
-    .map((item) => typeof item === 'string' ? coinglassSymbolFromText(item) : null)
-    .filter((symbol): symbol is CoinglassSymbol => Boolean(symbol));
-  return symbols.length > 0 ? [...new Set(symbols)] : ['BTC'];
-}
-
-function coinglassSymbolFromText(value: string): CoinglassSymbol | null {
-  const normalized = normalizeSymbol(value);
-  return COINGLASS_SYMBOLS.find((symbol) => normalized.includes(symbol)) ?? null;
-}
-
-function formatCoinglassSection(section: CoinglassSection): string {
-  const names: Record<CoinglassSection, string> = {
-    openInterest: 'Open interest',
-    fundingRateSymbol: 'Funding by symbol',
-    liquidationsTotals: 'Liquidations',
-    fundingRate: 'Funding overview',
-    longShortRatio: 'Long/short ratio',
-    etf: 'ETF',
-    basis: 'Basis',
-    spotInflowOutflow: 'Spot inflow/outflow',
-  };
-  return names[section];
 }
 
 function formatCoinglassScreenshotKind(kind: NonNullable<CoinglassSnapshot['screenshots']>[number]['kind']): string {

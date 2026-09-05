@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import type { ChatTarget, TradingViewAutoTimeframe, TradingViewChartPreset } from '../../../src/types';
+import { COINGLASS_SYMBOLS, type ChatTarget, type CoinglassSymbol, type TradingViewChartPreset } from '../../../src/types';
 import ChatTargetForm from './ChatTargetForm';
 import { logoForProvider, providerLogoNeedsBackplate } from '../logos';
-import { TRADINGVIEW_AUTO_TIMEFRAMES } from '../../../src/tradingview/auto-capture';
+import { DEFAULT_TRADINGVIEW_TIMEFRAMES } from '../../../src/tradingview/auto-capture';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -230,11 +230,9 @@ function TradingViewPresetForm({
 }) {
   const [name, setName] = useState(initialData?.name || '');
   const [symbol, setSymbol] = useState(initialData?.symbol || '');
+  const [coinglassSymbol, setCoinglassSymbol] = useState<CoinglassSymbol | ''>(initialData?.coinglassSymbol || '');
   const [chartUrl, setChartUrl] = useState(initialData?.chartUrl || '');
   const [enabled, setEnabled] = useState(initialData?.enabled ?? true);
-  const [timeframes, setTimeframes] = useState<Record<TradingViewAutoTimeframe, boolean>>(
-    initialData?.timeframes ?? Object.fromEntries(TRADINGVIEW_AUTO_TIMEFRAMES.map((timeframe) => [timeframe, true])) as Record<TradingViewAutoTimeframe, boolean>
-  );
   const [error, setError] = useState('');
 
   function handleSubmit(event: React.FormEvent): void {
@@ -246,17 +244,14 @@ function TradingViewPresetForm({
       setError('Name, symbol and a valid TradingView URL are required.');
       return;
     }
-    if (!TRADINGVIEW_AUTO_TIMEFRAMES.some((timeframe) => timeframes[timeframe])) {
-      setError('Select at least one timeframe.');
-      return;
-    }
     onSave({
       id: initialData?.id || `tv_${Date.now()}`,
       name: nextName,
       symbol: nextSymbol,
+      coinglassSymbol: coinglassSymbol || null,
       chartUrl: nextUrl,
       enabled,
-      timeframes,
+      timeframes: initialData?.timeframes ?? DEFAULT_TRADINGVIEW_TIMEFRAMES,
     });
   }
 
@@ -277,26 +272,23 @@ function TradingViewPresetForm({
       </label>
 
       <label className="form-control">
+        <span className="label-text">CoinGlass coin</span>
+        <select
+          className="select"
+          value={coinglassSymbol}
+          onChange={(event) => setCoinglassSymbol(event.target.value as CoinglassSymbol | '')}
+        >
+          <option value="">Do not scrape CoinGlass</option>
+          {COINGLASS_SYMBOLS.map((coin) => (
+            <option key={coin} value={coin}>{coin}</option>
+          ))}
+        </select>
+      </label>
+
+      <label className="form-control">
         <span className="label-text">Chart URL</span>
         <input className="input input-bordered" type="text" value={chartUrl} onChange={(event) => setChartUrl(event.target.value)} placeholder="https://www.tradingview.com/chart/?symbol=BINANCE:BTCUSDT.P" />
       </label>
-
-      <fieldset className="choice-fieldset choice-fieldset--compact">
-        <legend className="choice-fieldset__label">Timeframes</legend>
-        <div className="timeframe-options timeframe-options--settings">
-          {TRADINGVIEW_AUTO_TIMEFRAMES.map((timeframe) => (
-            <label key={timeframe} className="timeframe-option">
-              <input
-                className="checkbox checkbox-xs"
-                type="checkbox"
-                checked={timeframes[timeframe]}
-                onChange={(event) => setTimeframes({ ...timeframes, [timeframe]: event.target.checked })}
-              />
-              <span>{timeframe}</span>
-            </label>
-          ))}
-        </div>
-      </fieldset>
 
       <label className="chat-target-form__enabled" aria-label="Enabled">
         <input className="toggle toggle-sm" type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />

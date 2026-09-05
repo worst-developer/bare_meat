@@ -1,3 +1,5 @@
+import type { CoinglassSymbol } from '../providers/coinglass/types';
+
 // Provider platforms for dispatch
 export type {
   CoinglassExchangeFunding,
@@ -55,6 +57,7 @@ export interface TradingViewChartPreset {
   id: string;
   name: string;
   symbol: string;
+  coinglassSymbol?: CoinglassSymbol | null;
   chartUrl: string;
   enabled: boolean;
   timeframes: Record<TradingViewAutoTimeframe, boolean>;
@@ -62,6 +65,7 @@ export interface TradingViewChartPreset {
 
 export interface TradingViewAutoCaptureSettings {
   presets: TradingViewChartPreset[];
+  timeframes: Record<TradingViewAutoTimeframe, boolean>;
 }
 
 export interface TradingViewAutoCaptureRequest {
