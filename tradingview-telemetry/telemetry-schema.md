@@ -46,6 +46,8 @@ The single plugin does not export detailed `CTX|SESSION|...` rows because of the
 | `CTX|EMA|NEAREST_DIST_PCT` | percent | Absolute distance to nearest configured EMA. |
 | `CTX|SWEEP|PDH/PDL/PWH/PWL` | 0..3 | `0` untouched, `1` swept, `2` accepted beyond, `3` swept and reclaimed. |
 
+The chart also shows confirmed higher-timeframe EMA footprints as short dotted lines. A 4h chart shows daily EMA100/200/1000; a 1h chart shows 4h EMA100/200 plus daily EMA200/1000; and a 15m chart shows 1h EMA100/200 plus 4h EMA200. Labels use `<period> <source timeframe>`, for example `200 4h`. These visual references are not exported as telemetry.
+
 ## Cross-market and CME
 
 The single plugin exports `TOTAL`, `USDTD`, `BTCD`, `ETHBTC`, and `NVDA` with `PRICE`, `RET_1H`, `RET_4H`, and `RET_1D`. `NVDA` defaults to `OKX:NVDAUSDT.P`. The legacy cross-market script also exposes `DXY`, `NASDAQ`, `SPX`, `VIX`, and `US10Y`. Returns are percent changes of the latest source-timeframe close against its prior close.
