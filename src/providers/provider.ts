@@ -99,7 +99,11 @@ export function elementText(element: HTMLElement): string {
   return element.textContent ?? '';
 }
 
-export function attachFilesToInput(input: HTMLInputElement, files: File[]): void {
+export function attachFilesToInput(
+  input: HTMLInputElement,
+  files: File[],
+  options: { activateInput?: boolean } = {}
+): void {
   const transfer = new DataTransfer();
   for (const file of files) {
     transfer.items.add(file);
@@ -114,11 +118,13 @@ export function attachFilesToInput(input: HTMLInputElement, files: File[]): void
     });
   }
 
-  if (typeof PointerEvent !== 'undefined') {
-    input.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+  if (options.activateInput !== false) {
+    if (typeof PointerEvent !== 'undefined') {
+      input.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    }
+    input.dispatchEvent(createMouseLikeEvent('mousedown'));
+    input.dispatchEvent(createMouseLikeEvent('click'));
   }
-  input.dispatchEvent(createMouseLikeEvent('mousedown'));
-  input.dispatchEvent(createMouseLikeEvent('click'));
   input.dispatchEvent(new Event('input', { bubbles: true }));
   input.dispatchEvent(new Event('change', { bubbles: true }));
 }

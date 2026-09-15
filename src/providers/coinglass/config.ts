@@ -88,5 +88,6 @@ function coinglassEtfSlug(symbol: CoinglassSymbol): string {
   if (symbol === 'BTC') return 'bitcoin';
   if (symbol === 'ETH') return 'ethereum';
   if (symbol === 'SOL') return 'solana';
-  return 'hype';
+  if (symbol === 'HYPE') return 'hype';
+  return 'near';
 }

@@ -1,4 +1,4 @@
-export const COINGLASS_SYMBOLS = ['BTC', 'ETH', 'SOL', 'HYPE'] as const;
+export const COINGLASS_SYMBOLS = ['BTC', 'ETH', 'SOL', 'HYPE', 'NEAR'] as const;
 
 export type CoinglassSymbol = typeof COINGLASS_SYMBOLS[number];
 

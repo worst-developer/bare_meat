@@ -14,7 +14,6 @@ import {
   type ProviderAdapter,
 } from '../provider';
 import {
-  CHATGPT_ATTACHMENT_BUTTON_SELECTORS,
   CHATGPT_ATTACHMENT_UI_SELECTORS,
   CHATGPT_COMPOSER_SELECTORS,
   CHATGPT_FILE_INPUT_SELECTORS,
@@ -32,12 +31,16 @@ export class ChatGptAdapter implements ProviderAdapter {
   private attachmentUiBaseline = 0;
   private expectedAttachmentCount = 0;
   private attachedCount = 0;
+  private expectedAttachmentNames: string[] = [];
+  private attachmentNameBaselines = new Map<string, number>();
 
   beginTransfer(): void {
     this.composer = null;
     this.attachmentUiBaseline = this.countAttachmentUi();
     this.expectedAttachmentCount = 0;
     this.attachedCount = 0;
+    this.expectedAttachmentNames = [];
+    this.attachmentNameBaselines.clear();
   }
 
   detectPage(): boolean {
@@ -71,6 +74,10 @@ export class ChatGptAdapter implements ProviderAdapter {
     this.attachmentUiBaseline = this.countAttachmentUi();
     this.expectedAttachmentCount = files.length;
     this.attachedCount = 0;
+    this.expectedAttachmentNames = files.map((file) => file.name);
+    this.attachmentNameBaselines = new Map(
+      this.expectedAttachmentNames.map((name) => [name, this.countAttachmentName(name)])
+    );
 
     const batches = chatGptUploadBatches(files);
     for (const [index, batch] of batches.entries()) {
@@ -142,14 +149,6 @@ export class ChatGptAdapter implements ProviderAdapter {
     return null;
   }
 
-  private findAttachmentButton(): HTMLElement | null {
-    for (const selector of CHATGPT_ATTACHMENT_BUTTON_SELECTORS) {
-      const element = document.querySelector<HTMLElement>(selector);
-      if (element && !isDisabledElement(element)) return element;
-    }
-    return null;
-  }
-
   private findDropTarget(): HTMLElement | null {
     return document.querySelector<HTMLElement>('form')
       ?? document.querySelector<HTMLElement>('[data-testid="composer"]')
@@ -160,26 +159,18 @@ export class ChatGptAdapter implements ProviderAdapter {
     const input = this.findCompatibleFileInput(files);
     if (input) {
       resetFileInput(input);
-      attachFilesToInput(input, files);
-      return;
-    }
-
-    this.findAttachmentButton()?.click();
-    await delay(500);
-    const menuInput = this.findCompatibleFileInput(files) ?? this.findFileInput();
-    if (menuInput) {
-      resetFileInput(menuInput);
-      attachFilesToInput(menuInput, files);
+      attachFilesToInput(input, files, { activateInput: false });
       return;
     }
 
     dropFilesOnElement(this.findDropTarget() ?? composer, files);
     await delay(CHATGPT_UPLOAD_FALLBACK_SETTLE_MS);
-    if (this.countNewAttachmentUi() >= this.attachedCount + files.length) return;
+    const expectedCount = this.attachedCount + files.length;
+    if (this.hasUploadedAttachments(expectedCount)) return;
 
     pasteFilesIntoElement(composer, files);
     await delay(CHATGPT_UPLOAD_FALLBACK_SETTLE_MS);
-    if (this.countNewAttachmentUi() < this.attachedCount + files.length) {
+    if (!this.hasUploadedAttachments(expectedCount)) {
       throw new Error(`ChatGPT file input not found for ${files.map((file) => file.name).join(', ')}`);
     }
   }
@@ -209,16 +200,18 @@ export class ChatGptAdapter implements ProviderAdapter {
     while (Date.now() - started < timeoutMs) {
       attempts += 1;
       const uploadedCount = this.countNewAttachmentUi();
-      if (attempts === 1 || attempts % 5 === 0 || uploadedCount >= expectedCount) {
-        logChatGptAdapter('waiting attachments', { expectedCount, uploadedCount, attempts });
+      const uploadedNameCount = this.countNewAttachmentNames(expectedCount);
+      if (attempts === 1 || attempts % 5 === 0 || uploadedCount >= expectedCount || uploadedNameCount >= expectedCount) {
+        logChatGptAdapter('waiting attachments', { expectedCount, uploadedCount, uploadedNameCount, attempts });
       }
-      if (uploadedCount >= expectedCount) return true;
+      if (this.hasUploadedAttachments(expectedCount)) return true;
       await delay(500);
     }
 
     logChatGptAdapter('attachment upload wait timed out', {
       expectedCount,
       uploadedCount: this.countNewAttachmentUi(),
+      uploadedNameCount: this.countNewAttachmentNames(expectedCount),
     });
     return false;
   }
@@ -227,11 +220,31 @@ export class ChatGptAdapter implements ProviderAdapter {
     return Math.max(0, this.countAttachmentUi() - this.attachmentUiBaseline);
   }
 
+  private hasUploadedAttachments(expectedCount: number): boolean {
+    return this.countNewAttachmentUi() >= expectedCount
+      || this.countNewAttachmentNames(expectedCount) >= expectedCount;
+  }
+
   private countAttachmentUi(): number {
     return Math.max(
       0,
       ...CHATGPT_ATTACHMENT_UI_SELECTORS.map((selector) => document.querySelectorAll(selector).length)
     );
+  }
+
+  private countNewAttachmentNames(expectedCount: number): number {
+    return this.expectedAttachmentNames.slice(0, expectedCount).filter((name) => (
+      this.countAttachmentName(name) > (this.attachmentNameBaselines.get(name) ?? 0)
+    )).length;
+  }
+
+  private countAttachmentName(filename: string): number {
+    const surface = this.composer?.closest('form') ?? document.body;
+    const values = [surface.textContent ?? ''];
+    for (const element of surface.querySelectorAll<HTMLElement>('[aria-label], [title]')) {
+      values.push(element.getAttribute('aria-label') ?? '', element.getAttribute('title') ?? '');
+    }
+    return countOccurrences(values.join('\n'), filename);
   }
 }
 
@@ -239,6 +252,17 @@ export const chatGptAdapter = new ChatGptAdapter();
 
 function normalizeText(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+function countOccurrences(value: string, search: string): number {
+  if (!search) return 0;
+  let count = 0;
+  let offset = 0;
+  while ((offset = value.indexOf(search, offset)) !== -1) {
+    count += 1;
+    offset += search.length;
+  }
+  return count;
 }
 
 async function incomingScreenshotToFileForChatGpt(screenshot: IncomingScreenshot): Promise<File> {
