@@ -2,7 +2,7 @@ import type { TradingViewTelemetryMetric, TradingViewTelemetrySnapshot } from '.
 import { marketSessionStatuses } from './session-clock';
 import { telemetryFingerprint } from './telemetry-integrity';
 
-const PRIMARY_INDICATOR_TITLE = 'Market Context Telemetry [Agent]';
+const PRIMARY_INDICATOR_TITLE = 'Market Context Telemetry';
 const CROSS_INDICATOR_TITLE = 'Agent Context - Cross Market';
 const SUPPORTED_SCHEMAS = new Set([1, 2]);
 const MIN_PRIMARY_EVIDENCE_ROWS = 10;

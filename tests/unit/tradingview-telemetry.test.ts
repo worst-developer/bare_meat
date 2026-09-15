@@ -84,7 +84,7 @@ function dataWindowFixture(options: { primaryHidden?: boolean } = {}): string {
           </div>
           <div class="view-_gbYDtbd${primaryHiddenClass} hoverEnable-_gbYDtbd" tabindex="-1" data-role="menuitem" role="row" data-id="UgrXPo">
             <div class="header-_gbYDtbd">
-              <span class="headerTitle-_gbYDtbd apply-common-tooltip">Market Context Telemetry [Agent] (0900-1500:1234567, Asia/Tokyo)</span>
+              <span class="headerTitle-_gbYDtbd apply-common-tooltip">Market Context Telemetry (0900-1500:1234567, Asia/Tokyo)</span>
               <button aria-label="${primaryAction}" data-tooltip="${primaryAction}"></button>
             </div>
             <div class="values-_gbYDtbd">
@@ -195,7 +195,7 @@ function corruptedTelemetry(): TradingViewTelemetrySnapshot {
   }
 
   return {
-    indicatorTitle: 'Market Context Telemetry [Agent]',
+    indicatorTitle: 'Market Context Telemetry',
     schema: 1,
     symbol: 'BTCUSD.P',
     timeframe: '4H',
