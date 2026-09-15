@@ -46,7 +46,7 @@ The single plugin does not export detailed `CTX|SESSION|...` rows because of the
 | `CTX|EMA|NEAREST_DIST_PCT` | percent | Absolute distance to nearest configured EMA. |
 | `CTX|SWEEP|PDH/PDL/PWH/PWL` | 0..3 | `0` untouched, `1` swept, `2` accepted beyond, `3` swept and reclaimed. |
 
-The chart also shows confirmed higher-timeframe EMA footprints as short dotted lines. A 4h chart shows daily EMA100/200/1000; a 1h chart shows 4h EMA100/200 plus daily EMA200/1000; and a 15m chart shows 1h EMA100/200 plus 4h EMA200. Labels use `<period> <source timeframe>`, for example `200 4h`. These visual references are not exported as telemetry.
+The chart also shows confirmed higher-timeframe EMAs as dotted horizontal levels extending right from the current source period. A 4h chart shows daily EMA100/200/1000; a 1h chart shows 4h EMA100/200 plus daily EMA200/1000; and a 15m chart shows 1h EMA100/200 plus 4h EMA200. Labels use `EMA <period> <source timeframe>`, for example `EMA 200 4h`. These visual references are not exported as telemetry.
 
 ## Cross-market and CME
 

@@ -147,16 +147,17 @@ levelLine(line currentLine, float value, int startIndex, color lineColor, string
         result := na
     result
 
-emaFootprint(line currentLine, float value, color lineColor) =>
+emaLevelLine(line currentLine, float value, int startIndex, color lineColor) =>
     result = currentLine
     if not na(value)
-        footprintStart = math.max(0, bar_index - 18)
-        footprintEnd = bar_index + 1
+        safeStart = math.max(0, math.max(startIndex, bar_index - 450))
+        safeEnd = bar_index + 1
         if na(result)
-            result := line.new(footprintStart, value, footprintEnd, value, xloc=xloc.bar_index, extend=extend.none, color=lineColor, style=line.style_dotted, width=1)
+            result := line.new(safeStart, value, safeEnd, value, extend=extend.right, color=lineColor, style=line.style_dotted, width=1)
         else
-            line.set_xy1(result, footprintStart, value)
-            line.set_xy2(result, footprintEnd, value)
+            line.set_xy1(result, safeStart, value)
+            line.set_xy2(result, safeEnd, value)
+            line.set_extend(result, extend.right)
             line.set_color(result, lineColor)
             line.set_style(result, line.style_dotted)
             line.set_width(result, 1)
@@ -856,13 +857,13 @@ var label valTag = na
 var label ema100Tag = na
 var label ema200Tag = na
 var label sma200Tag = na
-var line dailyEma100Footprint = na
-var line dailyEma200Footprint = na
-var line dailyEma1000Footprint = na
-var line fourHourEma100Footprint = na
-var line fourHourEma200Footprint = na
-var line oneHourEma100Footprint = na
-var line oneHourEma200Footprint = na
+var line dailyEma100Line = na
+var line dailyEma200Line = na
+var line dailyEma1000Line = na
+var line fourHourEma100Line = na
+var line fourHourEma200Line = na
+var line oneHourEma100Line = na
+var line oneHourEma200Line = na
 var label dailyEma100Tag = na
 var label dailyEma200Tag = na
 var label dailyEma1000Tag = na
@@ -871,8 +872,10 @@ var label fourHourEma200Tag = na
 var label oneHourEma100Tag = na
 var label oneHourEma200Tag = na
 var array<float> labelSlots = array.new_float()
-var array<float> movingAverageLabelSlots = array.new_float()
 dayStartBar = nz(ta.valuewhen(timeframe.change("D"), bar_index, 0), bar_index - 1)
+dailyEmaStartBar = nz(ta.valuewhen(timeframe.change("D"), bar_index, 0), bar_index)
+fourHourEmaStartBar = nz(ta.valuewhen(timeframe.change("240"), bar_index, 0), bar_index)
+oneHourEmaStartBar = nz(ta.valuewhen(timeframe.change("60"), bar_index, 0), bar_index)
 weekStartBar = nz(ta.valuewhen(timeframe.change("W"), bar_index, 0), bar_index - 1)
 monthStartBar = nz(ta.valuewhen(timeframe.change("M"), bar_index, 0), bar_index - 1)
 profileStartBar = math.max(0, bar_index - profileLookback + 1)
@@ -893,7 +896,6 @@ oneHourFootprintColor = color.new(movingAverageColor, 65)
 footprintLabelColor = color.new(movingAverageColor, 10)
 if barstate.islast
     array.clear(labelSlots)
-    array.clear(movingAverageLabelSlots)
     if showLevels
         doLine := levelLine(doLine, dailyOpen, dayStartBar, levelVisualColor, line.style_solid, 1)
         pdhLine := levelLine(pdhLine, prevDailyHigh, dayStartBar, levelVisualColor, line.style_solid, 1)
@@ -947,9 +949,9 @@ if barstate.islast
         vahTag := levelTag(vahTag, na, 0, "VAH", color.orange)
         valTag := levelTag(valTag, na, 0, "VAL", color.orange)
     if showLongMovingAverages
-        ema100Tag := levelTag(ema100Tag, ema100, reserveLabelXOffset(ema100, labelPadding, movingAverageLabelSlots), "EMA 100", movingAverageColor)
-        ema200Tag := levelTag(ema200Tag, ema200, reserveLabelXOffset(ema200, labelPadding, movingAverageLabelSlots), "EMA 200", movingAverageColor)
-        sma200Tag := levelTag(sma200Tag, sma200, reserveLabelXOffset(sma200, labelPadding, movingAverageLabelSlots), "SMA 200", movingAverageColor)
+        ema100Tag := levelTag(ema100Tag, ema100, reserveLabelXOffset(ema100, labelPadding, labelSlots), "EMA 100", movingAverageColor)
+        ema200Tag := levelTag(ema200Tag, ema200, reserveLabelXOffset(ema200, labelPadding, labelSlots), "EMA 200", movingAverageColor)
+        sma200Tag := levelTag(sma200Tag, sma200, reserveLabelXOffset(sma200, labelPadding, labelSlots), "SMA 200", movingAverageColor)
     else
         ema100Tag := levelTag(ema100Tag, na, 0, "EMA 100", movingAverageColor)
         ema200Tag := levelTag(ema200Tag, na, 0, "EMA 200", movingAverageColor)
@@ -961,20 +963,20 @@ if barstate.islast
     fourHourEma200Value = showFourHourEma200 ? fourHourEma200 : na
     oneHourEma100Value = showOneHourEma100 ? oneHourEma100 : na
     oneHourEma200Value = showOneHourEma200 ? oneHourEma200 : na
-    dailyEma100Footprint := emaFootprint(dailyEma100Footprint, dailyEma100Value, dailyFootprintColor)
-    dailyEma200Footprint := emaFootprint(dailyEma200Footprint, dailyEma200Value, dailyFootprintColor)
-    dailyEma1000Footprint := emaFootprint(dailyEma1000Footprint, dailyEma1000Value, dailyFootprintColor)
-    fourHourEma100Footprint := emaFootprint(fourHourEma100Footprint, fourHourEma100Value, fourHourFootprintColor)
-    fourHourEma200Footprint := emaFootprint(fourHourEma200Footprint, fourHourEma200Value, fourHourFootprintColor)
-    oneHourEma100Footprint := emaFootprint(oneHourEma100Footprint, oneHourEma100Value, oneHourFootprintColor)
-    oneHourEma200Footprint := emaFootprint(oneHourEma200Footprint, oneHourEma200Value, oneHourFootprintColor)
-    dailyEma100Tag := levelTag(dailyEma100Tag, dailyEma100Value, reserveLabelXOffset(dailyEma100Value, labelPadding, movingAverageLabelSlots), "100 1d", footprintLabelColor)
-    dailyEma200Tag := levelTag(dailyEma200Tag, dailyEma200Value, reserveLabelXOffset(dailyEma200Value, labelPadding, movingAverageLabelSlots), "200 1d", footprintLabelColor)
-    dailyEma1000Tag := levelTag(dailyEma1000Tag, dailyEma1000Value, reserveLabelXOffset(dailyEma1000Value, labelPadding, movingAverageLabelSlots), "1000 1d", footprintLabelColor)
-    fourHourEma100Tag := levelTag(fourHourEma100Tag, fourHourEma100Value, reserveLabelXOffset(fourHourEma100Value, labelPadding, movingAverageLabelSlots), "100 4h", footprintLabelColor)
-    fourHourEma200Tag := levelTag(fourHourEma200Tag, fourHourEma200Value, reserveLabelXOffset(fourHourEma200Value, labelPadding, movingAverageLabelSlots), "200 4h", footprintLabelColor)
-    oneHourEma100Tag := levelTag(oneHourEma100Tag, oneHourEma100Value, reserveLabelXOffset(oneHourEma100Value, labelPadding, movingAverageLabelSlots), "100 1h", footprintLabelColor)
-    oneHourEma200Tag := levelTag(oneHourEma200Tag, oneHourEma200Value, reserveLabelXOffset(oneHourEma200Value, labelPadding, movingAverageLabelSlots), "200 1h", footprintLabelColor)
+    dailyEma100Line := emaLevelLine(dailyEma100Line, dailyEma100Value, dailyEmaStartBar, dailyFootprintColor)
+    dailyEma200Line := emaLevelLine(dailyEma200Line, dailyEma200Value, dailyEmaStartBar, dailyFootprintColor)
+    dailyEma1000Line := emaLevelLine(dailyEma1000Line, dailyEma1000Value, dailyEmaStartBar, dailyFootprintColor)
+    fourHourEma100Line := emaLevelLine(fourHourEma100Line, fourHourEma100Value, fourHourEmaStartBar, fourHourFootprintColor)
+    fourHourEma200Line := emaLevelLine(fourHourEma200Line, fourHourEma200Value, fourHourEmaStartBar, fourHourFootprintColor)
+    oneHourEma100Line := emaLevelLine(oneHourEma100Line, oneHourEma100Value, oneHourEmaStartBar, oneHourFootprintColor)
+    oneHourEma200Line := emaLevelLine(oneHourEma200Line, oneHourEma200Value, oneHourEmaStartBar, oneHourFootprintColor)
+    dailyEma100Tag := levelTag(dailyEma100Tag, dailyEma100Value, reserveLabelXOffset(dailyEma100Value, labelPadding, labelSlots), "EMA 100 1d", footprintLabelColor)
+    dailyEma200Tag := levelTag(dailyEma200Tag, dailyEma200Value, reserveLabelXOffset(dailyEma200Value, labelPadding, labelSlots), "EMA 200 1d", footprintLabelColor)
+    dailyEma1000Tag := levelTag(dailyEma1000Tag, dailyEma1000Value, reserveLabelXOffset(dailyEma1000Value, labelPadding, labelSlots), "EMA 1000 1d", footprintLabelColor)
+    fourHourEma100Tag := levelTag(fourHourEma100Tag, fourHourEma100Value, reserveLabelXOffset(fourHourEma100Value, labelPadding, labelSlots), "EMA 100 4h", footprintLabelColor)
+    fourHourEma200Tag := levelTag(fourHourEma200Tag, fourHourEma200Value, reserveLabelXOffset(fourHourEma200Value, labelPadding, labelSlots), "EMA 200 4h", footprintLabelColor)
+    oneHourEma100Tag := levelTag(oneHourEma100Tag, oneHourEma100Value, reserveLabelXOffset(oneHourEma100Value, labelPadding, labelSlots), "EMA 100 1h", footprintLabelColor)
+    oneHourEma200Tag := levelTag(oneHourEma200Tag, oneHourEma200Value, reserveLabelXOffset(oneHourEma200Value, labelPadding, labelSlots), "EMA 200 1h", footprintLabelColor)
 
 plot(showLongMovingAverages ? ema100 : na, "EMA 100", color=movingAverageColor, linewidth=2, display=display.all - display.status_line)
 plot(showLongMovingAverages ? ema200 : na, "EMA 200", color=movingAverageColor, linewidth=2, display=display.all - display.status_line)
