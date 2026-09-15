@@ -24,6 +24,8 @@ All fields are numeric and use `CTX|<GROUP>|<SUBGROUP>|<METRIC>`. Disabled or un
 | `CTX|VOL|RVOL/SESSION_RVOL` | ratio | Bar and developing-session relative volume. |
 | `CTX|VP|FIXED|POC/VAH/VAL` | price | Legacy two-indicator export only. Optional approximate fixed-range profile levels. |
 
+Current quarterly (`QO`) and yearly (`YO`) opens are shown as visual levels under the existing reference-level toggle. They use TradingView calendar periods and are not exported as telemetry.
+
 ## Sessions and statistics
 
 The single plugin does not export detailed `CTX|SESSION|...` rows because of the 64-plot limit; the browser extension injects current active-session state separately. The legacy two-indicator export exposes stable `OPEN`, `HIGH`, `LOW`, `RANGE_PCT`, and `ACTIVE` fields for `ASIA`, `FRANKFURT`, `LONDON`, and `NY`. Asia, London, and NY also expose `RETURN_PCT`.

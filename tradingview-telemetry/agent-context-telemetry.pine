@@ -147,19 +147,36 @@ levelLine(line currentLine, float value, int startIndex, color lineColor, string
         result := na
     result
 
-emaLevelLine(line currentLine, float value, int startIndex, color lineColor) =>
+anchoredLevelLine(line currentLine, float value, int startIndex, color lineColor, string lineStyle) =>
     result = currentLine
     if not na(value)
         safeStart = math.max(0, math.max(startIndex, bar_index - 450))
         safeEnd = bar_index + 1
         if na(result)
-            result := line.new(safeStart, value, safeEnd, value, extend=extend.right, color=lineColor, style=line.style_dotted, width=1)
+            result := line.new(safeStart, value, safeEnd, value, extend=extend.right, color=lineColor, style=lineStyle, width=1)
         else
             line.set_xy1(result, safeStart, value)
             line.set_xy2(result, safeEnd, value)
             line.set_extend(result, extend.right)
             line.set_color(result, lineColor)
-            line.set_style(result, line.style_dotted)
+            line.set_style(result, lineStyle)
+            line.set_width(result, 1)
+    else if not na(result)
+        line.delete(result)
+        result := na
+    result
+
+timeAnchoredLevelLine(line currentLine, float value, int startTime, color lineColor) =>
+    result = currentLine
+    if not na(value)
+        if na(result)
+            result := line.new(startTime, value, time_close, value, xloc=xloc.bar_time, extend=extend.right, color=lineColor, style=line.style_solid, width=1)
+        else
+            line.set_xy1(result, startTime, value)
+            line.set_xy2(result, time_close, value)
+            line.set_extend(result, extend.right)
+            line.set_color(result, lineColor)
+            line.set_style(result, line.style_solid)
             line.set_width(result, 1)
     else if not na(result)
         line.delete(result)
@@ -379,6 +396,7 @@ inNy = nyWasActive
 [oneHourEma100, oneHourEma200] = request.security(syminfo.tickerid, "60", [ta.ema(close, 100)[1], ta.ema(close, 200)[1]], barmerge.gaps_off, barmerge.lookahead_on)
 [weeklyOpen, prevWeeklyHigh, prevWeeklyLow, prevWeeklyClose] = request.security(syminfo.tickerid, "W", [open, high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_off)
 [monthlyOpen, prevMonthlyHigh, prevMonthlyLow, prevMonthlyClose] = request.security(syminfo.tickerid, "M", [open, high[1], low[1], close[1]], barmerge.gaps_off, barmerge.lookahead_off)
+[quarterlyOpen, yearlyOpen] = request.security(syminfo.tickerid, "3M", [open, ta.valuewhen(timeframe.change("12M"), open, 0)], barmerge.gaps_off, barmerge.lookahead_on)
 medianDailyRange = request.security(syminfo.tickerid, "D", ta.median(high - low, rangeLength)[1], barmerge.gaps_off, barmerge.lookahead_off)
 [totalClose, total1h, total4h, total1d] = marketData(totalTicker)
 [usdtClose, usdt1h, usdt4h, usdt1d] = marketData(usdtTicker)
@@ -839,6 +857,8 @@ var line pwlLine = na
 var line moLine = na
 var line pmhLine = na
 var line pmlLine = na
+var line qoLine = na
+var line yoLine = na
 var line pocLine = na
 var line vahLine = na
 var line valLine = na
@@ -851,6 +871,8 @@ var label pwlTag = na
 var label moTag = na
 var label pmhTag = na
 var label pmlTag = na
+var label qoTag = na
+var label yoTag = na
 var label pocTag = na
 var label vahTag = na
 var label valTag = na
@@ -878,6 +900,8 @@ fourHourEmaStartBar = nz(ta.valuewhen(timeframe.change("240"), bar_index, 0), ba
 oneHourEmaStartBar = nz(ta.valuewhen(timeframe.change("60"), bar_index, 0), bar_index)
 weekStartBar = nz(ta.valuewhen(timeframe.change("W"), bar_index, 0), bar_index - 1)
 monthStartBar = nz(ta.valuewhen(timeframe.change("M"), bar_index, 0), bar_index - 1)
+quarterStartTime = nz(ta.valuewhen(timeframe.change("3M"), time, 0), time)
+yearStartTime = nz(ta.valuewhen(timeframe.change("12M"), time, 0), time)
 profileStartBar = math.max(0, bar_index - profileLookback + 1)
 labelPadding = math.max(math.max(atr * 0.25, close * 0.0025), syminfo.mintick * 25)
 isFourHourChart = chartSeconds == 14400
@@ -897,6 +921,8 @@ dailyFootprintTransparency = 15
 fourHourFootprintTransparency = 30
 oneHourFootprintTransparency = 45
 footprintLabelTransparency = 5
+quarterOpenColor = color.rgb(239, 108, 0)
+yearOpenColor = color.rgb(103, 58, 183)
 if barstate.islast
     array.clear(labelSlots)
     if showLevels
@@ -909,6 +935,8 @@ if barstate.islast
         moLine := levelLine(moLine, monthlyOpen, monthStartBar, levelVisualColor, line.style_solid, 1)
         pmhLine := levelLine(pmhLine, prevMonthlyHigh, monthStartBar, levelVisualColor, line.style_solid, 1)
         pmlLine := levelLine(pmlLine, prevMonthlyLow, monthStartBar, levelVisualColor, line.style_solid, 1)
+        qoLine := timeAnchoredLevelLine(qoLine, quarterlyOpen, quarterStartTime, quarterOpenColor)
+        yoLine := timeAnchoredLevelLine(yoLine, yearlyOpen, yearStartTime, yearOpenColor)
         doTag := levelTag(doTag, dailyOpen, reserveLabelXOffset(dailyOpen, labelPadding, labelSlots), "DO", color.blue)
         pdhTag := levelTag(pdhTag, prevDailyHigh, reserveLabelXOffset(prevDailyHigh, labelPadding, labelSlots), "PDH", color.green)
         pdlTag := levelTag(pdlTag, prevDailyLow, reserveLabelXOffset(prevDailyLow, labelPadding, labelSlots), "PDL", color.red)
@@ -918,6 +946,8 @@ if barstate.islast
         moTag := levelTag(moTag, monthlyOpen, reserveLabelXOffset(monthlyOpen, labelPadding, labelSlots), "MO", color.fuchsia)
         pmhTag := levelTag(pmhTag, prevMonthlyHigh, reserveLabelXOffset(prevMonthlyHigh, labelPadding, labelSlots), "PMH", color.green)
         pmlTag := levelTag(pmlTag, prevMonthlyLow, reserveLabelXOffset(prevMonthlyLow, labelPadding, labelSlots), "PML", color.red)
+        qoTag := levelTag(qoTag, quarterlyOpen, reserveLabelXOffset(quarterlyOpen, labelPadding, labelSlots), "QO", quarterOpenColor)
+        yoTag := levelTag(yoTag, yearlyOpen, reserveLabelXOffset(yearlyOpen, labelPadding, labelSlots), "YO", yearOpenColor)
     else
         doLine := levelLine(doLine, na, dayStartBar, levelVisualColor, line.style_solid, 1)
         pdhLine := levelLine(pdhLine, na, dayStartBar, levelVisualColor, line.style_solid, 1)
@@ -928,6 +958,8 @@ if barstate.islast
         moLine := levelLine(moLine, na, monthStartBar, levelVisualColor, line.style_solid, 1)
         pmhLine := levelLine(pmhLine, na, monthStartBar, levelVisualColor, line.style_solid, 1)
         pmlLine := levelLine(pmlLine, na, monthStartBar, levelVisualColor, line.style_solid, 1)
+        qoLine := timeAnchoredLevelLine(qoLine, na, quarterStartTime, quarterOpenColor)
+        yoLine := timeAnchoredLevelLine(yoLine, na, yearStartTime, yearOpenColor)
         doTag := levelTag(doTag, na, 0, "DO", color.blue)
         pdhTag := levelTag(pdhTag, na, 0, "PDH", color.green)
         pdlTag := levelTag(pdlTag, na, 0, "PDL", color.red)
@@ -937,6 +969,8 @@ if barstate.islast
         moTag := levelTag(moTag, na, 0, "MO", color.fuchsia)
         pmhTag := levelTag(pmhTag, na, 0, "PMH", color.green)
         pmlTag := levelTag(pmlTag, na, 0, "PML", color.red)
+        qoTag := levelTag(qoTag, na, 0, "QO", quarterOpenColor)
+        yoTag := levelTag(yoTag, na, 0, "YO", yearOpenColor)
     if showProfile
         pocLine := levelLine(pocLine, profilePoc, profileStartBar, levelVisualColor, line.style_solid, 1)
         vahLine := levelLine(vahLine, profileVah, profileStartBar, levelVisualColor, line.style_solid, 1)
@@ -966,13 +1000,13 @@ if barstate.islast
     fourHourEma200Value = showFourHourEma200 ? fourHourEma200 : na
     oneHourEma100Value = showOneHourEma100 ? oneHourEma100 : na
     oneHourEma200Value = showOneHourEma200 ? oneHourEma200 : na
-    dailyEma100Line := emaLevelLine(dailyEma100Line, dailyEma100Value, dailyEmaStartBar, color.new(ema100FootprintColor, dailyFootprintTransparency))
-    dailyEma200Line := emaLevelLine(dailyEma200Line, dailyEma200Value, dailyEmaStartBar, color.new(ema200FootprintColor, dailyFootprintTransparency))
-    dailyEma1000Line := emaLevelLine(dailyEma1000Line, dailyEma1000Value, dailyEmaStartBar, color.new(ema1000FootprintColor, dailyFootprintTransparency))
-    fourHourEma100Line := emaLevelLine(fourHourEma100Line, fourHourEma100Value, fourHourEmaStartBar, color.new(ema100FootprintColor, fourHourFootprintTransparency))
-    fourHourEma200Line := emaLevelLine(fourHourEma200Line, fourHourEma200Value, fourHourEmaStartBar, color.new(ema200FootprintColor, fourHourFootprintTransparency))
-    oneHourEma100Line := emaLevelLine(oneHourEma100Line, oneHourEma100Value, oneHourEmaStartBar, color.new(ema100FootprintColor, oneHourFootprintTransparency))
-    oneHourEma200Line := emaLevelLine(oneHourEma200Line, oneHourEma200Value, oneHourEmaStartBar, color.new(ema200FootprintColor, oneHourFootprintTransparency))
+    dailyEma100Line := anchoredLevelLine(dailyEma100Line, dailyEma100Value, dailyEmaStartBar, color.new(ema100FootprintColor, dailyFootprintTransparency), line.style_dotted)
+    dailyEma200Line := anchoredLevelLine(dailyEma200Line, dailyEma200Value, dailyEmaStartBar, color.new(ema200FootprintColor, dailyFootprintTransparency), line.style_dotted)
+    dailyEma1000Line := anchoredLevelLine(dailyEma1000Line, dailyEma1000Value, dailyEmaStartBar, color.new(ema1000FootprintColor, dailyFootprintTransparency), line.style_dotted)
+    fourHourEma100Line := anchoredLevelLine(fourHourEma100Line, fourHourEma100Value, fourHourEmaStartBar, color.new(ema100FootprintColor, fourHourFootprintTransparency), line.style_dotted)
+    fourHourEma200Line := anchoredLevelLine(fourHourEma200Line, fourHourEma200Value, fourHourEmaStartBar, color.new(ema200FootprintColor, fourHourFootprintTransparency), line.style_dotted)
+    oneHourEma100Line := anchoredLevelLine(oneHourEma100Line, oneHourEma100Value, oneHourEmaStartBar, color.new(ema100FootprintColor, oneHourFootprintTransparency), line.style_dotted)
+    oneHourEma200Line := anchoredLevelLine(oneHourEma200Line, oneHourEma200Value, oneHourEmaStartBar, color.new(ema200FootprintColor, oneHourFootprintTransparency), line.style_dotted)
     dailyEma100Tag := levelTag(dailyEma100Tag, dailyEma100Value, reserveLabelXOffset(dailyEma100Value, labelPadding, labelSlots), "EMA 100 1d", color.new(ema100FootprintColor, footprintLabelTransparency))
     dailyEma200Tag := levelTag(dailyEma200Tag, dailyEma200Value, reserveLabelXOffset(dailyEma200Value, labelPadding, labelSlots), "EMA 200 1d", color.new(ema200FootprintColor, footprintLabelTransparency))
     dailyEma1000Tag := levelTag(dailyEma1000Tag, dailyEma1000Value, reserveLabelXOffset(dailyEma1000Value, labelPadding, labelSlots), "EMA 1000 1d", color.new(ema1000FootprintColor, footprintLabelTransparency))
